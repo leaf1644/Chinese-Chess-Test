@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "game_state": 2,
+  "player_color": "red",
+  "ai_color": "black",
+  "view_color": "red",
+  "ai_difficulty": "中等",
+  "suggest_enabled": false,
+  "moves": [
+    "h2e2",
+    "h9g7",
+    "h0g2",
+    "g6g5",
+    "i0h0",
+    "i9h9"
+  ],
+  "history_scroll_offset": 0.0
+}

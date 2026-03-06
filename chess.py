@@ -6,16 +6,19 @@ import subprocess
 import threading
 import queue
 import math
+import random
+import json
 
 # --- 1. 系統常數 ---
-SCREEN_WIDTH = 1000
-SCREEN_HEIGHT = 800
-BOARD_WIDTH = 540
-BOARD_HEIGHT = 630
-GRID_SIZE = 60
+SCREEN_WIDTH = 1100
+SCREEN_HEIGHT = 900
+GRID_SIZE = 64
+BOARD_WIDTH = 8 * GRID_SIZE + 10
+BOARD_HEIGHT = 9 * GRID_SIZE + 10
+TOP_UI_HEIGHT = 130
 
 MARGIN_X = (SCREEN_WIDTH - BOARD_WIDTH) // 2
-MARGIN_Y = (SCREEN_HEIGHT - BOARD_HEIGHT) // 2 + 50
+MARGIN_Y = (SCREEN_HEIGHT - BOARD_HEIGHT) // 2 + 40
 
 # 顏色定義
 COLOR_BG = (235, 205, 155)
@@ -40,7 +43,15 @@ AI_MOVETIME_MS = 700
 AI_DELAY_SEC = 1.0
 AI_EVAL_MOVETIME_MS = 250
 AI_SUGGEST_MOVETIME_MS = 350
+AI_INFINITE_SEARCH_MAX_WAIT_SEC = 2.0
 UCCI_FILES = "abcdefghi"
+SAVE_FILE_NAME = "savegame.json"
+
+AI_DIFFICULTY_PRESETS = {
+    "簡單": {"depth": 3, "movetime_ms": 50, "mistake_rate": 0.45},
+    "中等": {"depth": 6, "movetime_ms": 150, "mistake_rate": 0.15},
+    "困難": {"depth": None, "movetime_ms": 500, "mistake_rate": 0.03},
+}
 
 PIECE_TO_FEN = {
     ('車', RED): 'R', ('馬', RED): 'N', ('相', RED): 'B', ('仕', RED): 'A', ('帥', RED): 'K', ('炮', RED): 'C', ('包', RED): 'C', ('兵', RED): 'P',
@@ -62,6 +73,141 @@ def ucci_to_board(ucci):
     if not (0 <= x <= 8 and 0 <= y <= 9):
         return None
     return (x, y)
+
+
+def piece_type_from_name(name):
+    if name == '車':
+        return "rook"
+    if name == '馬':
+        return "knight"
+    if name in ('相', '象'):
+        return "bishop"
+    if name in ('仕', '士'):
+        return "advisor"
+    if name in ('帥', '將'):
+        return "king"
+    if name in ('炮', '包'):
+        return "cannon"
+    if name in ('兵', '卒'):
+        return "pawn"
+    return None
+
+
+def create_generated_board_surface():
+    width = 8 * GRID_SIZE + 10
+    height = 9 * GRID_SIZE + 10
+    surf = pygame.Surface((width, height))
+
+    # 生成木紋底色：垂直漸層 + 正弦紋理。
+    for y in range(height):
+        ratio = y / max(1, height - 1)
+        r = int(224 - 30 * ratio)
+        g = int(198 - 28 * ratio)
+        b = int(150 - 16 * ratio)
+        for x in range(width):
+            wood = int(8 * math.sin((x * 0.18) + (y * 0.03)) + 4 * math.sin(x * 0.05))
+            rr = max(0, min(255, r + wood))
+            gg = max(0, min(255, g + wood))
+            bb = max(0, min(255, b + wood))
+            surf.set_at((x, y), (rr, gg, bb))
+
+    return surf
+
+
+def create_generated_piece_sprite(piece_name, piece_color, font_names):
+    size = GRID_SIZE
+    center = size // 2
+    radius = GRID_SIZE // 2 - 2
+
+    sprite = pygame.Surface((size, size), pygame.SRCALPHA)
+    # 陰影
+    pygame.draw.circle(sprite, (95, 75, 55, 150), (center + 2, center + 2), radius - 1)
+    # 棋子底
+    pygame.draw.circle(sprite, (242, 224, 188), (center, center), radius - 1)
+    # 外框
+    pygame.draw.circle(sprite, piece_color, (center, center), radius - 1, 3)
+
+    # 內圓紋理
+    pygame.draw.circle(sprite, (210, 188, 150, 120), (center, center), radius - 7, 1)
+    pygame.draw.circle(sprite, (200, 176, 135, 90), (center, center), radius - 10, 1)
+
+    font = pygame.font.SysFont(font_names, 30, bold=True)
+    text = font.render(piece_name, True, piece_color)
+    text_rect = text.get_rect(center=(center, center))
+    sprite.blit(text, text_rect)
+    return sprite
+
+
+def load_visual_assets(font_names):
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    assets_dir = os.path.join(base_dir, "assets")
+    pieces_dir = os.path.join(assets_dir, "pieces")
+
+    board_surface = None
+    board_candidates = [
+        os.path.join(assets_dir, "board.png"),
+        os.path.join(assets_dir, "board.jpg"),
+        os.path.join(assets_dir, "board.jpeg"),
+    ]
+    for path in board_candidates:
+        if os.path.exists(path):
+            try:
+                raw = pygame.image.load(path).convert()
+                board_surface = pygame.transform.smoothscale(raw, (8 * GRID_SIZE + 10, 9 * GRID_SIZE + 10))
+                break
+            except Exception:
+                board_surface = None
+
+    if board_surface is None:
+        board_surface = create_generated_board_surface()
+
+    piece_sprites = {}
+    for piece_name, piece_color in PIECE_TO_FEN.keys():
+        key = (piece_name, piece_color)
+        if key in piece_sprites:
+            continue
+
+        side = "red" if piece_color == RED else "black"
+        piece_type = piece_type_from_name(piece_name)
+        sprite = None
+        if piece_type:
+            for ext in ("png", "jpg", "jpeg"):
+                candidate = os.path.join(pieces_dir, f"{side}_{piece_type}.{ext}")
+                if os.path.exists(candidate):
+                    try:
+                        raw = pygame.image.load(candidate).convert_alpha()
+                        sprite = pygame.transform.smoothscale(raw, (GRID_SIZE, GRID_SIZE))
+                        break
+                    except Exception:
+                        sprite = None
+
+        if sprite is None:
+            sprite = create_generated_piece_sprite(piece_name, piece_color, font_names)
+        piece_sprites[key] = sprite
+
+    return board_surface, piece_sprites
+
+
+def draw_piece_with_assets(screen, piece, font, view_color, piece_sprites):
+    if view_color == BLACK:
+        draw_x = 8 - piece.x
+        draw_y = 9 - piece.y
+    else:
+        draw_x = piece.x
+        draw_y = piece.y
+
+    cx = MARGIN_X + draw_x * GRID_SIZE
+    cy = MARGIN_Y + draw_y * GRID_SIZE
+
+    sprite = piece_sprites.get((piece.name, piece.color))
+    if sprite:
+        rect = sprite.get_rect(center=(cx, cy))
+        screen.blit(sprite, rect)
+        if piece.selected:
+            pygame.draw.circle(screen, COLOR_SELECTED, (cx, cy), GRID_SIZE // 2 + 2, 4)
+        return
+
+    piece.draw(screen, font, view_color)
 
 # --- 2. 棋子類別 ---
 class Piece:
@@ -107,6 +253,7 @@ class XiangqiBoard:
         
         # 悔棋功能：存儲移動歷史
         self.move_history = []     # 儲存所有移動: (piece, old_x, old_y, captured_piece)
+        self.move_ucci_history = []  # 儲存 UCCI 走步，用於存檔/重播
         self.move_notation = []    # 儲存中文記譜: ["兵三進一", "炮8平7", ...]
         self.move_is_check = []    # 記錄每步移動後是否造成將軍
         self.move_is_capture = []  # 記錄每步是否吃子
@@ -192,6 +339,7 @@ class XiangqiBoard:
         
         # 記錄移動歷史（用於悔棋）
         self.move_history.append((piece, original_x, original_y, removed_piece))
+        self.move_ucci_history.append(board_to_ucci(original_x, original_y) + board_to_ucci(target_x, target_y))
         
         # 生成並記錄中文記譜
         notation = self.generate_move_notation(piece, original_x, original_y, target_x, target_y)
@@ -710,6 +858,8 @@ class XiangqiBoard:
         # 同時刪除對應的記譜和狀態記錄
         if self.move_notation:
             self.move_notation.pop()
+        if self.move_ucci_history:
+            self.move_ucci_history.pop()
         if self.move_is_check:
             self.move_is_check.pop()
         if self.move_is_capture:
@@ -789,11 +939,14 @@ class XiangqiBoard:
         # 4. 馬
         if name == '馬':
             if not ((adx == 1 and ady == 2) or (adx == 2 and ady == 1)): return False
-            # 正確計算馬的腿位置：用整數除法 (dx//2, dy//2)
-            # 例如：dx=2,dy=1 時，腿位置=(piece.x+1, piece.y+0)
-            # 例如：dx=1,dy=2 時，腿位置=(piece.x+0, piece.y+1)
-            leg_x = piece.x + dx // 2
-            leg_y = piece.y + dy // 2
+            # 蹩馬腿：腿點在「長邊方向」的相鄰格。
+            # 不能直接用 //2，因為 -1 // 2 會得到 -1，造成負方向判定錯誤。
+            if adx == 2:
+                leg_x = piece.x + (1 if dx > 0 else -1)
+                leg_y = piece.y
+            else:
+                leg_x = piece.x
+                leg_y = piece.y + (1 if dy > 0 else -1)
             if self.get_piece_at(leg_x, leg_y): return False
             return True
         # 5. 車
@@ -999,10 +1152,35 @@ class PikafishEngine:
         self._send("isready")
         self._wait_for(lambda s: s == "readyok", 5)
 
-    def bestmove(self, fen, movetime_ms=AI_MOVETIME_MS):
+    def _build_go_command(self, movetime_ms=None, depth=None):
+        parts = []
+        if isinstance(depth, int) and depth > 0:
+            parts.extend(["depth", str(depth)])
+        if movetime_ms is not None and movetime_ms > 0:
+            parts.extend(["movetime", str(int(movetime_ms))])
+        if parts:
+            return "go " + " ".join(parts)
+        return "go infinite"
+
+    def bestmove(self, fen, movetime_ms=AI_MOVETIME_MS, depth=None, max_wait_sec=None):
+        self._drain_queue()
         self._send(f"position fen {fen}")
-        self._send(f"go movetime {movetime_ms}")
-        line = self._wait_for(lambda s: s.startswith("bestmove "), max(2, movetime_ms / 1000 + 2))
+        go_cmd = self._build_go_command(movetime_ms, depth)
+        self._send(go_cmd)
+
+        if max_wait_sec is None:
+            if movetime_ms is not None and movetime_ms > 0:
+                max_wait_sec = max(1.2, movetime_ms / 1000 + 1.0)
+            else:
+                max_wait_sec = AI_INFINITE_SEARCH_MAX_WAIT_SEC
+
+        line = self._wait_for(lambda s: s.startswith("bestmove "), max_wait_sec)
+        if not line and go_cmd == "go infinite":
+            try:
+                self._send("stop")
+            except Exception:
+                pass
+            line = self._wait_for(lambda s: s.startswith("bestmove "), 2)
         if not line:
             return None
         parts = line.split()
@@ -1095,10 +1273,10 @@ class EngineDispatcher:
             if task is None:
                 continue
 
-            req_id, kind, fen, movetime_ms = task
+            req_id, kind, fen, movetime_ms, depth, max_wait_sec = task
             try:
                 if kind == "bestmove":
-                    payload = self.engine.bestmove(fen, movetime_ms)
+                    payload = self.engine.bestmove(fen, movetime_ms, depth=depth, max_wait_sec=max_wait_sec)
                 elif kind == "analyse":
                     payload = self.engine.analyse_score(fen, movetime_ms)
                 else:
@@ -1107,8 +1285,8 @@ class EngineDispatcher:
             except Exception as ex:
                 self.result_queue.put((req_id, kind, fen, "err", str(ex)))
 
-    def submit(self, req_id, kind, fen, movetime_ms):
-        self.task_queue.put((req_id, kind, fen, movetime_ms))
+    def submit(self, req_id, kind, fen, movetime_ms=None, depth=None, max_wait_sec=None):
+        self.task_queue.put((req_id, kind, fen, movetime_ms, depth, max_wait_sec))
 
     def get_result_nowait(self):
         try:
@@ -1147,7 +1325,7 @@ def apply_ucci_move(board, move_str):
 def main():
     pygame.init()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("中國象棋 Ver 3.0 (將軍檢測 + 悔棋)")
+    pygame.display.set_caption("中國象棋 Ver 3.1 (Pikafish 難度 + 可替換素材)")
     clock = pygame.time.Clock()
     
     font_names = ["simhei", "arialunicodems", "pingfangtc", "microsoftjhenghei"]
@@ -1157,6 +1335,7 @@ def main():
     font_small = pygame.font.SysFont(font_names, 24)
     font_warn = pygame.font.SysFont(font_names, 48) # 警告字體
     font_menu = pygame.font.SysFont(font_names, 56)
+    board_surface, piece_sprites = load_visual_assets(font_names)
     
     # 遊戲狀態
     game_state = MODE_MENU  # 初始化為菜單狀態
@@ -1174,6 +1353,12 @@ def main():
     ai_wait_until = 0.0
     ai_request_id = None
     ai_request_fen = None
+    ai_difficulty_order = ["簡單", "中等", "困難"]
+    ai_difficulty = "中等"
+    ai_search_depth = AI_DIFFICULTY_PRESETS[ai_difficulty]["depth"]
+    ai_movetime_ms = AI_DIFFICULTY_PRESETS[ai_difficulty]["movetime_ms"]
+    ai_max_wait_sec = AI_DIFFICULTY_PRESETS[ai_difficulty].get("max_wait_sec")
+    ai_mistake_rate = AI_DIFFICULTY_PRESETS[ai_difficulty].get("mistake_rate", 0.0)
 
     eval_enabled = True
     eval_request_id = None
@@ -1185,12 +1370,430 @@ def main():
     suggest_request_id = None
     suggest_last_fen_requested = None
     suggest_move = None
+    btn_difficulty = None
+    save_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), SAVE_FILE_NAME)
+    draw_offer_popup = None  # {"from_color": RED/BLACK}
+    btn_draw_accept = None
+    btn_draw_reject = None
+    replay_mode_active = False
+    replay_record_moves = []
+    replay_record_notation = []
+    replay_finished_winner = None
+    replay_finished_draw_reason = ""
+    replay_snapshots = []
+    replay_index = None  # None = 顯示最新局面；數字 = 顯示第 N 手後局面（0 為初始）
 
     def reset_ai_state():
         nonlocal ai_wait_until, ai_request_id, ai_request_fen
         ai_wait_until = 0.0
         ai_request_id = None
         ai_request_fen = None
+
+    def apply_ai_difficulty(level):
+        nonlocal ai_difficulty, ai_search_depth, ai_movetime_ms, ai_max_wait_sec, ai_mistake_rate, btn_difficulty
+        cfg = AI_DIFFICULTY_PRESETS[level]
+        ai_difficulty = level
+        ai_search_depth = cfg.get("depth")
+        ai_movetime_ms = cfg.get("movetime_ms")
+        ai_max_wait_sec = cfg.get("max_wait_sec")
+        ai_mistake_rate = cfg.get("mistake_rate", 0.0)
+        if btn_difficulty:
+            btn_difficulty.text = f"AI 難度：{ai_difficulty}"
+
+    def get_history_panel_rects():
+        panel_x = MARGIN_X + BOARD_WIDTH + 20
+        panel_y = MARGIN_Y
+        panel_width = SCREEN_WIDTH - panel_x - 30
+        panel_height = BOARD_HEIGHT
+        clip_rect = pygame.Rect(panel_x, panel_y + 35, panel_width - 15, panel_height - 35)
+        return panel_x, panel_y, panel_width, panel_height, clip_rect
+
+    def get_display_notation_list():
+        if replay_mode_active and replay_record_notation:
+            return replay_record_notation
+        if board:
+            return board.move_notation
+        return []
+
+    def get_history_max_scroll():
+        total_lines = len(get_display_notation_list())
+        panel_height = BOARD_HEIGHT
+        return max(0, total_lines * 25 - (panel_height - 40))
+
+    def get_notation_index_at_pos(pos):
+        if not board:
+            return None
+        panel_x, panel_y, panel_width, panel_height, clip_rect = get_history_panel_rects()
+        if not clip_rect.collidepoint(pos):
+            return None
+        scroll_offset = history_scroll.scroll_offset if history_scroll else 0
+        y_in_list = pos[1] - (panel_y + 35) + scroll_offset
+        if y_in_list < 0:
+            return None
+        idx = int(y_in_list // 25)
+        notation_list = get_display_notation_list()
+        if 0 <= idx < len(notation_list):
+            return idx
+        return None
+
+    def make_board_snapshot():
+        if not board:
+            return None
+        return {
+            "pieces": [(p.name, p.color, p.x, p.y) for p in board.pieces],
+            "turn": board.turn,
+        }
+
+    def reset_replay_history():
+        nonlocal replay_snapshots, replay_index, replay_mode_active
+        replay_snapshots = []
+        replay_index = None
+        replay_mode_active = False
+        snap = make_board_snapshot()
+        if snap:
+            replay_snapshots.append(snap)
+
+    def append_replay_snapshot():
+        nonlocal replay_index
+        snap = make_board_snapshot()
+        if snap:
+            replay_snapshots.append(snap)
+        replay_index = None
+
+    def sync_replay_history_after_undo():
+        nonlocal replay_snapshots, replay_index
+        if not board:
+            replay_snapshots = []
+            replay_index = None
+            return
+        expected = len(board.move_notation) + 1
+        if len(replay_snapshots) > expected:
+            replay_snapshots = replay_snapshots[:expected]
+        elif len(replay_snapshots) < expected:
+            # 理論上不應發生，保底重置為當前局面。
+            replay_snapshots = [make_board_snapshot()]
+        replay_index = None
+
+    def restore_game_to_step(step_idx, source_moves=None):
+        nonlocal board, replay_snapshots, replay_index, replay_mode_active
+        if not board:
+            return False
+
+        all_moves = list(source_moves) if source_moves is not None else list(board.move_ucci_history)
+        step_idx = max(0, min(step_idx, len(all_moves)))
+
+        rebuilt = XiangqiBoard(board.game_mode)
+        new_snapshots = [{"pieces": [(p.name, p.color, p.x, p.y) for p in rebuilt.pieces], "turn": rebuilt.turn}]
+        for mv in all_moves[:step_idx]:
+            if not apply_ucci_move(rebuilt, mv):
+                return False
+            new_snapshots.append({"pieces": [(p.name, p.color, p.x, p.y) for p in rebuilt.pieces], "turn": rebuilt.turn})
+
+        rebuilt.winner = None
+        rebuilt.draw_reason = ""
+        rebuilt.warning_msg = ""
+        rebuilt.warning_timer = 0
+        board = rebuilt
+        replay_snapshots = new_snapshots
+        replay_index = step_idx
+        reset_ai_state()
+        reset_eval_state(reset_display=True)
+        reset_suggest_state(reset_display=True)
+        close_draw_offer_popup()
+        return True
+
+    def on_move_applied():
+        reset_eval_state()
+        reset_suggest_state()
+        append_replay_snapshot()
+
+    def capture_finished_record_if_needed():
+        nonlocal replay_record_moves, replay_record_notation
+        nonlocal replay_finished_winner, replay_finished_draw_reason
+        if not board:
+            return
+        if not (board.winner or board.draw_reason):
+            return
+        if replay_record_moves:
+            return
+        replay_record_moves = list(board.move_ucci_history)
+        replay_record_notation = list(board.move_notation)
+        replay_finished_winner = board.winner
+        replay_finished_draw_reason = board.draw_reason
+
+    def enter_replay_mode(step_idx=None):
+        nonlocal replay_mode_active, ai_enabled, btn_replay_mode
+        if not board:
+            return False
+        capture_finished_record_if_needed()
+        if not replay_record_notation and not replay_record_moves:
+            board.set_warning("沒有可復盤的棋譜")
+            return False
+
+        if step_idx is None:
+            step_idx = len(replay_record_moves)
+        if not restore_game_to_step(step_idx, source_moves=replay_record_moves):
+            board.set_warning("進入復盤模式失敗")
+            return False
+
+        replay_mode_active = True
+        ai_enabled = False
+        if btn_replay_mode:
+            btn_replay_mode.text = "復盤中"
+        board.set_warning(f"已進入復盤模式（第 {step_idx} 手）")
+        return True
+
+    def color_to_str(color):
+        return "red" if color == RED else "black"
+
+    def str_to_color(token, default):
+        if token == "red":
+            return RED
+        if token == "black":
+            return BLACK
+        return default
+
+    def setup_in_game_buttons():
+        nonlocal btn_undo, btn_main_menu, btn_suggest_toggle
+        nonlocal btn_save_game, btn_load_game, btn_draw_offer, btn_replay_mode
+        btn_undo = Button(SCREEN_WIDTH // 2 - 80, SCREEN_HEIGHT - 40, 160, 35, "悔棋")
+        btn_main_menu = Button(SCREEN_WIDTH // 2 + 100, SCREEN_HEIGHT - 40, 180, 35, "回主選單")
+        btn_suggest_toggle = Button(SCREEN_WIDTH // 2 - 320, SCREEN_HEIGHT - 40, 220, 35, "建議著法：關")
+        btn_save_game = Button(10, SCREEN_HEIGHT - 40, 150, 35, "存檔")
+        btn_load_game = Button(810, SCREEN_HEIGHT - 40, 180, 35, "讀檔")
+        btn_draw_offer = Button(915, 12, 170, 32, "求和")
+        btn_replay_mode = Button(915, 50, 170, 32, "復盤模式")
+
+    def start_new_game(mode, human_side=RED):
+        nonlocal game_state, board, history_scroll
+        nonlocal ai_enabled, eval_enabled, suggest_enabled
+        nonlocal player_color, ai_color, view_color
+        nonlocal draw_offer_popup, btn_draw_accept, btn_draw_reject
+        nonlocal replay_snapshots, replay_index, replay_mode_active
+        nonlocal replay_record_moves, replay_record_notation
+        nonlocal replay_finished_winner, replay_finished_draw_reason
+
+        stop_engine()
+        reset_ai_state()
+        reset_eval_state(reset_display=True)
+        reset_suggest_state(reset_display=True)
+
+        board = XiangqiBoard(mode)
+        game_state = mode
+        eval_enabled = True
+        suggest_enabled = False
+
+        if mode == MODE_AI:
+            ai_enabled = True
+            player_color = human_side
+            ai_color = BLACK if human_side == RED else RED
+            view_color = human_side
+        else:
+            ai_enabled = False
+            player_color = RED
+            ai_color = BLACK
+            view_color = RED
+
+        history_scroll = ScrollBar(SCREEN_WIDTH - 30, MARGIN_Y, 15, BOARD_HEIGHT, 1000)
+        setup_in_game_buttons()
+        reset_replay_history()
+        replay_record_moves = []
+        replay_record_notation = []
+        replay_finished_winner = None
+        replay_finished_draw_reason = ""
+        replay_index = None
+        replay_mode_active = False
+        draw_offer_popup = None
+        btn_draw_accept = None
+        btn_draw_reject = None
+
+    def save_game_to_disk():
+        if not board or game_state not in (MODE_PVP, MODE_AI):
+            return False
+        try:
+            payload = {
+                "version": 1,
+                "game_state": game_state,
+                "player_color": color_to_str(player_color),
+                "ai_color": color_to_str(ai_color),
+                "view_color": color_to_str(view_color),
+                "ai_difficulty": ai_difficulty,
+                "suggest_enabled": bool(suggest_enabled),
+                "moves": list(board.move_ucci_history),
+                "history_scroll_offset": float(history_scroll.scroll_offset if history_scroll else 0.0),
+            }
+            with open(save_file_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            board.set_warning("存檔成功")
+            return True
+        except Exception as ex:
+            if board:
+                board.set_warning(f"存檔失敗：{ex}")
+            return False
+
+    def load_game_from_disk():
+        nonlocal game_state, board, history_scroll
+        nonlocal ai_enabled, eval_enabled, suggest_enabled
+        nonlocal player_color, ai_color, view_color
+        nonlocal draw_offer_popup, btn_draw_accept, btn_draw_reject
+        nonlocal replay_index, replay_mode_active
+        nonlocal replay_record_moves, replay_record_notation
+        nonlocal replay_finished_winner, replay_finished_draw_reason
+
+        if not os.path.exists(save_file_path):
+            if board:
+                board.set_warning("找不到存檔檔案")
+            return False
+
+        try:
+            with open(save_file_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except Exception as ex:
+            if board:
+                board.set_warning(f"讀檔失敗：{ex}")
+            return False
+
+        try:
+            saved_mode = int(payload.get("game_state", MODE_PVP))
+            if saved_mode not in (MODE_PVP, MODE_AI):
+                saved_mode = MODE_PVP
+
+            saved_player = str_to_color(payload.get("player_color"), RED)
+            saved_ai = str_to_color(payload.get("ai_color"), BLACK)
+            saved_view = str_to_color(payload.get("view_color"), saved_player)
+            saved_moves = payload.get("moves", [])
+            if not isinstance(saved_moves, list):
+                raise ValueError("存檔 moves 格式錯誤")
+
+            if saved_mode == MODE_AI:
+                start_new_game(MODE_AI, saved_player)
+                ai_color = saved_ai if saved_ai != player_color else (BLACK if player_color == RED else RED)
+                view_color = saved_view
+            else:
+                start_new_game(MODE_PVP, RED)
+                view_color = saved_view
+
+            saved_diff = payload.get("ai_difficulty", ai_difficulty)
+            if saved_diff in AI_DIFFICULTY_PRESETS:
+                apply_ai_difficulty(saved_diff)
+
+            # 回放所有走步，重建完整棋局狀態與規則計數器。
+            reset_replay_history()
+            for mv in saved_moves:
+                if not isinstance(mv, str) or len(mv) < 4:
+                    raise ValueError("存檔中有無效走步")
+                if not apply_ucci_move(board, mv):
+                    raise ValueError(f"無法套用走步：{mv}")
+                append_replay_snapshot()
+
+            # 還原 UI 狀態
+            suggest_enabled = bool(payload.get("suggest_enabled", False))
+            if btn_suggest_toggle:
+                btn_suggest_toggle.text = "建議著法：開" if suggest_enabled else "建議著法：關"
+
+            if history_scroll:
+                max_scroll = get_history_max_scroll()
+                saved_offset = float(payload.get("history_scroll_offset", 0.0))
+                history_scroll.scroll_offset = max(0, min(max_scroll, saved_offset))
+
+            reset_ai_state()
+            reset_eval_state(reset_display=True)
+            reset_suggest_state(reset_display=True)
+            replay_mode_active = False
+            replay_record_moves = []
+            replay_record_notation = []
+            replay_finished_winner = None
+            replay_finished_draw_reason = ""
+            replay_index = None
+            draw_offer_popup = None
+            btn_draw_accept = None
+            btn_draw_reject = None
+            board.set_warning("讀檔成功")
+            return True
+        except Exception as ex:
+            if board:
+                board.set_warning(f"讀檔失敗：{ex}")
+            return False
+
+    def open_draw_offer_popup():
+        nonlocal draw_offer_popup, btn_draw_accept, btn_draw_reject
+        if not board or board.winner or board.draw_reason:
+            return
+        draw_offer_popup = {"from_color": board.turn}
+        btn_draw_accept = Button(SCREEN_WIDTH // 2 - 130, SCREEN_HEIGHT // 2 + 20, 120, 40, "接受和棋")
+        btn_draw_reject = Button(SCREEN_WIDTH // 2 + 10, SCREEN_HEIGHT // 2 + 20, 120, 40, "拒絕")
+
+    def close_draw_offer_popup():
+        nonlocal draw_offer_popup, btn_draw_accept, btn_draw_reject
+        draw_offer_popup = None
+        btn_draw_accept = None
+        btn_draw_reject = None
+
+    def request_draw():
+        if not board or board.winner or board.draw_reason:
+            return
+        if game_state == MODE_PVP:
+            open_draw_offer_popup()
+            return
+        if game_state == MODE_AI:
+            if board.turn != player_color:
+                board.set_warning("目前不是你的回合，不能向 AI 求和")
+                return
+            if abs(eval_red_score_cp) <= 100:
+                board.draw_reason = "雙方同意和棋（AI接受求和）"
+                board.set_warning("AI 接受和棋")
+            else:
+                board.set_warning("AI 拒絕和棋（分差超過100）")
+
+    def collect_legal_ucci_moves(color):
+        if not board:
+            return []
+
+        moves = []
+        for piece in list(board.pieces):
+            if piece.color != color:
+                continue
+
+            from_x, from_y = piece.x, piece.y
+            for tx in range(9):
+                for ty in range(10):
+                    if tx == from_x and ty == from_y:
+                        continue
+                    if not board.is_valid_move(piece, tx, ty):
+                        continue
+
+                    target = board.get_piece_at(tx, ty)
+                    piece.x, piece.y = tx, ty
+                    if target:
+                        board.pieces.remove(target)
+
+                    illegal = board.is_kings_facing() or board.is_under_attack(piece.color)
+
+                    piece.x, piece.y = from_x, from_y
+                    if target:
+                        board.pieces.append(target)
+
+                    if illegal:
+                        continue
+
+                    moves.append(board_to_ucci(from_x, from_y) + board_to_ucci(tx, ty))
+
+        return moves
+
+    def choose_ai_move(engine_bestmove):
+        if not engine_bestmove or ai_mistake_rate <= 0:
+            return engine_bestmove
+        if random.random() >= ai_mistake_rate:
+            return engine_bestmove
+
+        legal_moves = collect_legal_ucci_moves(ai_color)
+        if not legal_moves:
+            return engine_bestmove
+
+        alternatives = [mv for mv in legal_moves if mv != engine_bestmove]
+        if not alternatives:
+            return engine_bestmove
+        return random.choice(alternatives)
 
     def reset_eval_state(reset_display=False):
         nonlocal eval_request_id, eval_last_fen_requested
@@ -1264,14 +1867,21 @@ def main():
                 if not best:
                     ai_enabled = False
                     board.set_warning("AI 無可用走法或超時")
-                elif not apply_ucci_move(board, best):
-                    ai_enabled = False
-                    board.set_warning(f"AI 走法無效：{best}")
                 else:
-                    ai_wait_until = 0.0
-                    ai_request_fen = None
-                    reset_eval_state()
-                    reset_suggest_state()
+                    move_to_play = choose_ai_move(best)
+                    if not apply_ucci_move(board, move_to_play):
+                        # 如果故意失誤著因局面時序失配而失敗，退回最佳著再試一次。
+                        if move_to_play != best and apply_ucci_move(board, best):
+                            ai_wait_until = 0.0
+                            ai_request_fen = None
+                            on_move_applied()
+                        else:
+                            ai_enabled = False
+                            board.set_warning(f"AI 走法無效：{move_to_play}")
+                    else:
+                        ai_wait_until = 0.0
+                        ai_request_fen = None
+                        on_move_applied()
                 continue
 
             if req_id == eval_request_id:
@@ -1330,10 +1940,15 @@ def main():
     btn_pvp = Button(SCREEN_WIDTH // 2 - 140, 260, 280, 60, "玩家對玩家")
     btn_ai_red = Button(SCREEN_WIDTH // 2 - 140, 350, 280, 60, "玩家(紅) 對 AI")
     btn_ai_black = Button(SCREEN_WIDTH // 2 - 140, 440, 280, 60, "玩家(黑) 對 AI")
+    btn_difficulty = Button(SCREEN_WIDTH // 2 - 140, 530, 280, 50, f"AI 難度：{ai_difficulty}")
+    btn_menu_load = Button(SCREEN_WIDTH // 2 - 140, 600, 280, 50, "讀取存檔")
     btn_undo = None  # 悔棋按鈕會在遊戲中建立
     btn_main_menu = None  # 遊戲中隨時返回主選單
     btn_suggest_toggle = None  # 建議著法開關
-    btn_return_menu = None  # 返回菜單按鈕會在遊戲結束時建立
+    btn_save_game = None
+    btn_load_game = None
+    btn_draw_offer = None
+    btn_replay_mode = None
     
     while True:
         mouse_pos = pygame.mouse.get_pos()
@@ -1352,53 +1967,17 @@ def main():
             if game_state == MODE_MENU:
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     if btn_pvp.is_clicked(mouse_pos):
-                        stop_engine()
-                        reset_ai_state()
-                        reset_eval_state(reset_display=True)
-                        reset_suggest_state(reset_display=True)
-                        board = XiangqiBoard(MODE_PVP)
-                        game_state = MODE_PVP
-                        ai_enabled = False
-                        eval_enabled = True
-                        player_color = RED
-                        ai_color = BLACK
-                        view_color = RED
-                        btn_undo = Button(SCREEN_WIDTH // 2 - 80, SCREEN_HEIGHT - 40, 160, 35, "悔棋")
-                        btn_main_menu = Button(SCREEN_WIDTH // 2 + 100, SCREEN_HEIGHT - 40, 180, 35, "回主選單")
-                        btn_suggest_toggle = Button(SCREEN_WIDTH // 2 - 320, SCREEN_HEIGHT - 40, 220, 35, "建議著法：關")
-                        history_scroll = ScrollBar(SCREEN_WIDTH - 30, MARGIN_Y, 15, BOARD_HEIGHT, 1000)
+                        start_new_game(MODE_PVP, RED)
                     elif btn_ai_red.is_clicked(mouse_pos):
-                        stop_engine()
-                        reset_ai_state()
-                        reset_eval_state(reset_display=True)
-                        reset_suggest_state(reset_display=True)
-                        board = XiangqiBoard(MODE_AI)
-                        game_state = MODE_AI
-                        ai_enabled = True
-                        eval_enabled = True
-                        player_color = RED
-                        ai_color = BLACK
-                        view_color = RED
-                        btn_undo = Button(SCREEN_WIDTH // 2 - 80, SCREEN_HEIGHT - 40, 160, 35, "悔棋")
-                        btn_main_menu = Button(SCREEN_WIDTH // 2 + 100, SCREEN_HEIGHT - 40, 180, 35, "回主選單")
-                        btn_suggest_toggle = Button(SCREEN_WIDTH // 2 - 320, SCREEN_HEIGHT - 40, 220, 35, "建議著法：關")
-                        history_scroll = ScrollBar(SCREEN_WIDTH - 30, MARGIN_Y, 15, BOARD_HEIGHT, 1000)
+                        start_new_game(MODE_AI, RED)
                     elif btn_ai_black.is_clicked(mouse_pos):
-                        stop_engine()
-                        reset_ai_state()
-                        reset_eval_state(reset_display=True)
-                        reset_suggest_state(reset_display=True)
-                        board = XiangqiBoard(MODE_AI)
-                        game_state = MODE_AI
-                        ai_enabled = True
-                        eval_enabled = True
-                        player_color = BLACK
-                        ai_color = RED
-                        view_color = BLACK
-                        btn_undo = Button(SCREEN_WIDTH // 2 - 80, SCREEN_HEIGHT - 40, 160, 35, "悔棋")
-                        btn_main_menu = Button(SCREEN_WIDTH // 2 + 100, SCREEN_HEIGHT - 40, 180, 35, "回主選單")
-                        btn_suggest_toggle = Button(SCREEN_WIDTH // 2 - 320, SCREEN_HEIGHT - 40, 220, 35, "建議著法：關")
-                        history_scroll = ScrollBar(SCREEN_WIDTH - 30, MARGIN_Y, 15, BOARD_HEIGHT, 1000)
+                        start_new_game(MODE_AI, BLACK)
+                    elif btn_difficulty and btn_difficulty.is_clicked(mouse_pos):
+                        idx = ai_difficulty_order.index(ai_difficulty)
+                        next_idx = (idx + 1) % len(ai_difficulty_order)
+                        apply_ai_difficulty(ai_difficulty_order[next_idx])
+                    elif btn_menu_load and btn_menu_load.is_clicked(mouse_pos):
+                        load_game_from_disk()
             
             # --- 遊戲模式 ---
             elif event.type == pygame.MOUSEBUTTONDOWN and (game_state == MODE_PVP or game_state == MODE_AI):
@@ -1410,46 +1989,93 @@ def main():
                     reset_suggest_state(reset_display=True)
                     game_state = MODE_MENU
                     board = None
-                    btn_return_menu = None
                     btn_main_menu = None
                     btn_suggest_toggle = None
                     btn_undo = None
+                    btn_save_game = None
+                    btn_load_game = None
+                    btn_draw_offer = None
+                    btn_replay_mode = None
                     history_scroll = None
-                # 遊戲結束（勝利或和棋）時的返回菜單按鈕
-                elif (board.winner or board.draw_reason) and btn_return_menu and btn_return_menu.is_clicked(mouse_pos):
-                    stop_engine()
-                    reset_ai_state()
-                    reset_eval_state(reset_display=True)
-                    reset_suggest_state(reset_display=True)
-                    game_state = MODE_MENU
-                    board = None
-                    btn_return_menu = None
-                    btn_main_menu = None
-                    btn_suggest_toggle = None
-                    btn_undo = None
-                    history_scroll = None
-                # 未結束遊戲時的操作
-                elif not board.winner and not board.draw_reason:
-                    # 處理滾輪事件（向上）
-                    if event.button == 4:  # 滾輪向上
+                    replay_snapshots = []
+                    replay_index = None
+                    replay_mode_active = False
+                    replay_record_moves = []
+                    replay_record_notation = []
+                    replay_finished_winner = None
+                    replay_finished_draw_reason = ""
+                    close_draw_offer_popup()
+                else:
+                    max_scroll = get_history_max_scroll()
+
+                    # PVP 求和彈窗優先處理
+                    if draw_offer_popup:
+                        if event.button == 1:
+                            if btn_draw_accept and btn_draw_accept.is_clicked(mouse_pos):
+                                board.draw_reason = "雙方同意和棋"
+                                close_draw_offer_popup()
+                            elif btn_draw_reject and btn_draw_reject.is_clicked(mouse_pos):
+                                board.set_warning("對方拒絕和棋")
+                                close_draw_offer_popup()
+                        continue
+
+                    # 先處理棋譜滾動（終局後也可滾動）。
+                    if event.button == 4:
                         if history_scroll:
-                            history_scroll.handle_scroll(-30, len(board.move_notation) * 25)
-                    # 處理滾輪事件（向下）
-                    elif event.button == 5:  # 滾輪向下
+                            history_scroll.handle_scroll(-30, max_scroll)
+                        continue
+                    if event.button == 5:
                         if history_scroll:
-                            history_scroll.handle_scroll(30, len(board.move_notation) * 25)
-                    # 建議著法開關
+                            history_scroll.handle_scroll(30, max_scroll)
+                        continue
+
+                    # 滾動條拖動起點
+                        if event.button == 1 and history_scroll:
+                            history_scroll.handle_click(mouse_pos)
+                            if history_scroll.is_dragging:
+                                continue
+
+                    if event.button == 1 and btn_replay_mode and btn_replay_mode.is_clicked(mouse_pos):
+                        if replay_mode_active:
+                            board.set_warning("已在復盤模式")
+                        elif board.winner or board.draw_reason:
+                            enter_replay_mode()
+                        else:
+                            board.set_warning("對局尚未結束，暫不可進入復盤模式")
+                        continue
+
+                    # 未進入復盤模式時，終局局面不可直接操作棋子。
+                    if (board.winner or board.draw_reason) and not replay_mode_active:
+                        continue
+
+                    # 復盤模式下可點譜跳局面，但不影響原終局棋譜。
+                    if replay_mode_active and event.button == 1:
+                        idx = get_notation_index_at_pos(mouse_pos)
+                        if idx is not None:
+                            if restore_game_to_step(idx + 1, source_moves=replay_record_moves):
+                                board.set_warning(f"復盤跳轉：第 {idx + 1} 手")
+                            else:
+                                board.set_warning("復盤跳轉失敗")
+                            continue
+
+                    # 以下是未結束遊戲時的操作
+                    if btn_save_game and btn_save_game.is_clicked(mouse_pos):
+                        save_game_to_disk()
+                    elif btn_load_game and btn_load_game.is_clicked(mouse_pos):
+                        load_game_from_disk()
+                    elif btn_draw_offer and (not replay_mode_active) and btn_draw_offer.is_clicked(mouse_pos):
+                        request_draw()
                     elif btn_suggest_toggle and btn_suggest_toggle.is_clicked(mouse_pos):
                         suggest_enabled = not suggest_enabled
                         btn_suggest_toggle.text = "建議著法：開" if suggest_enabled else "建議著法：關"
                         reset_suggest_state(reset_display=True)
-                    # 悔棋按鈕
                     elif btn_undo and btn_undo.is_clicked(mouse_pos):
-                        board.undo_last_move()
-                        board.selected_piece = None
-                        reset_ai_state()
-                        reset_eval_state()
-                        reset_suggest_state()
+                        if board.undo_last_move():
+                            board.selected_piece = None
+                            reset_ai_state()
+                            reset_eval_state()
+                            reset_suggest_state()
+                            sync_replay_history_after_undo()
                     else:
                         if game_state == MODE_AI and ai_enabled and board.turn == ai_color:
                             continue
@@ -1468,10 +2094,9 @@ def main():
                                 if board.is_valid_move(selected, gx, gy):
                                     if not board.move_piece(selected, gx, gy):
                                         # 如果 move_piece 返回 False，代表移動後會被將軍，已被駁回
-                                        pass 
+                                        pass
                                     else:
-                                        reset_eval_state()
-                                        reset_suggest_state()
+                                        on_move_applied()
                                         if game_state == MODE_AI and board.turn == ai_color:
                                             reset_ai_state()
                                             ai_wait_until = time.time() + AI_DELAY_SEC
@@ -1483,6 +2108,14 @@ def main():
                                 if clicked and clicked.color == board.turn:
                                     clicked.selected = True
                                     board.selected_piece = clicked
+
+            elif event.type == pygame.MOUSEMOTION and (game_state == MODE_PVP or game_state == MODE_AI):
+                if history_scroll:
+                    history_scroll.handle_drag(mouse_pos, get_history_max_scroll())
+
+            elif event.type == pygame.MOUSEBUTTONUP and (game_state == MODE_PVP or game_state == MODE_AI):
+                if event.button == 1 and history_scroll:
+                    history_scroll.handle_release()
 
         # --- 引擎結果回收 ---
         poll_engine_results()
@@ -1497,7 +2130,14 @@ def main():
                 ai_request_fen = board.to_fen()
                 if ensure_engine():
                     ai_request_id = new_request_id()
-                    engine_dispatcher.submit(ai_request_id, "bestmove", ai_request_fen, AI_MOVETIME_MS)
+                    engine_dispatcher.submit(
+                        ai_request_id,
+                        "bestmove",
+                        ai_request_fen,
+                        ai_movetime_ms,
+                        depth=ai_search_depth,
+                        max_wait_sec=ai_max_wait_sec,
+                    )
                 else:
                     ai_enabled = False
                     board.set_warning("AI 引擎初始化失敗")
@@ -1517,7 +2157,7 @@ def main():
         # --- 建議著法 ---
         if game_state in (MODE_PVP, MODE_AI) and board and suggest_enabled and not board.winner and not board.draw_reason:
             # AI 模式下，只在玩家回合提供建議
-            if game_state == MODE_AI and board.turn != player_color:
+            if game_state == MODE_AI and (not replay_mode_active) and board.turn != player_color:
                 suggest_move = None
             else:
                 current_fen = board.to_fen()
@@ -1525,7 +2165,7 @@ def main():
                     if ensure_engine():
                         suggest_last_fen_requested = current_fen
                         suggest_request_id = new_request_id()
-                        engine_dispatcher.submit(suggest_request_id, "bestmove", current_fen, AI_SUGGEST_MOVETIME_MS)
+                        engine_dispatcher.submit(suggest_request_id, "bestmove", current_fen, AI_SUGGEST_MOVETIME_MS, depth=None, max_wait_sec=None)
                     else:
                         suggest_enabled = False
                         if btn_suggest_toggle:
@@ -1533,6 +2173,9 @@ def main():
                         board.set_warning("建議引擎初始化失敗")
         elif not suggest_enabled:
             suggest_move = None
+
+        if game_state in (MODE_PVP, MODE_AI) and board:
+            capture_finished_record_if_needed()
 
         # --- 繪圖 ---
         screen.fill(COLOR_BG)
@@ -1550,56 +2193,79 @@ def main():
             btn_pvp.update_hover(mouse_pos)
             btn_ai_red.update_hover(mouse_pos)
             btn_ai_black.update_hover(mouse_pos)
+            if btn_difficulty:
+                btn_difficulty.update_hover(mouse_pos)
+            if btn_menu_load:
+                btn_menu_load.update_hover(mouse_pos)
             btn_pvp.draw(screen, font)
             btn_ai_red.draw(screen, font)
             btn_ai_black.draw(screen, font)
+            if btn_difficulty:
+                btn_difficulty.draw(screen, font_small)
+            if btn_menu_load:
+                btn_menu_load.draw(screen, font_small)
+            tip = font_small.render("提示：點擊 AI 難度按鈕可循環切換", True, BLACK)
+            screen.blit(tip, (SCREEN_WIDTH // 2 - 180, 665))
         
         elif game_state == MODE_PVP or game_state == MODE_AI:
             # 繪製遊戲界面
             # 1. 繪製 UI 欄
-            pygame.draw.rect(screen, COLOR_UI_BAR, (0, 0, SCREEN_WIDTH, 90))
+            pygame.draw.rect(screen, COLOR_UI_BAR, (0, 0, SCREEN_WIDTH, TOP_UI_HEIGHT))
             
             turn_str = "紅方回合" if board.turn == RED else "黑方回合"
             color = RED if board.turn == RED else WHITE
-            screen.blit(font_ui.render(turn_str, True, color), (20, 20))
+            screen.blit(font_ui.render(turn_str, True, color), (20, 12))
 
-            mode_text = "模式：雙人" if game_state == MODE_PVP else f"你：{'紅方' if player_color == RED else '黑方'}  AI：{'紅方' if ai_color == RED else '黑方'}"
-            screen.blit(font_small.render(mode_text, True, WHITE), (20, 62))
+            mode_text = (
+                "模式：雙人"
+                if game_state == MODE_PVP
+                else f"你：{'紅方' if player_color == RED else '黑方'}  AI：{'紅方' if ai_color == RED else '黑方'}  難度：{ai_difficulty}"
+            )
+            screen.blit(font_small.render(mode_text, True, WHITE), (20, 52))
 
-            screen.blit(font_small.render("紅方評分", True, WHITE), (520, 16))
-            screen.blit(font_eval.render(eval_text, True, GOLD), (520, 36))
+            eval_x = 730
+            screen.blit(font_small.render("紅方評分", True, WHITE), (eval_x, 10))
+            screen.blit(font_eval.render(eval_text, True, GOLD), (eval_x, 34))
 
             sugg_text = f"建議: {suggest_move}" if (suggest_enabled and suggest_move) else "建議: --"
-            screen.blit(font_small.render(sugg_text, True, WHITE), (520, 72))
+            screen.blit(font_small.render(sugg_text, True, WHITE), (eval_x, 92))
             
             # 狀態顯示 (將軍 / 勝利 / 正常)
-            if board.winner:
+            if replay_mode_active:
+                if replay_finished_winner:
+                    status = "原局結果：紅方獲勝" if replay_finished_winner == RED else "原局結果：黑方獲勝"
+                    screen.blit(font.render(status, True, GOLD), (250, 10))
+                elif replay_finished_draw_reason:
+                    draw_text = font.render(f"原局結果：{replay_finished_draw_reason}", True, WARNING_COLOR)
+                    screen.blit(draw_text, (250, 10))
+            elif board.winner:
                 status = "紅方獲勝！" if board.winner == RED else "黑方獲勝！"
-                screen.blit(font_ui.render(status, True, GOLD), (220, 25))
-                
-                # 創建返回菜單按鈕（如果還沒創建）
-                if not btn_return_menu:
-                    btn_return_menu = Button(SCREEN_WIDTH // 2 - 80, SCREEN_HEIGHT - 40, 160, 35, "回到菜單")
+                screen.blit(font_ui.render(status, True, GOLD), (250, 10))
             elif board.draw_reason:
                 # 顯示和棋原因
                 draw_text = font.render(board.draw_reason, True, WARNING_COLOR)
-                screen.blit(draw_text, (220, 25))
-                
-                # 創建返回菜單按鈕
-                if not btn_return_menu:
-                    btn_return_menu = Button(SCREEN_WIDTH // 2 - 80, SCREEN_HEIGHT - 40, 160, 35, "回到菜單")
+                screen.blit(draw_text, (250, 10))
             elif board.is_check:
                 # 顯示閃爍的將軍文字
                 if int(time.time() * 2) % 2 == 0: # 簡單的閃爍效果
-                    screen.blit(font_warn.render("將軍！", True, GOLD), (250, 20))
+                    screen.blit(font_warn.render("將軍！", True, GOLD), (250, 10))
+
+            if replay_mode_active:
+                rv_text = font_small.render("復盤模式：可點譜跳步、可繼續下棋，且不影響原棋譜", True, GOLD)
+                screen.blit(rv_text, (20, 92))
+            elif board.winner or board.draw_reason:
+                rv_text = font_small.render("對局已結束，按「復盤模式」可開始分析", True, GOLD)
+                screen.blit(rv_text, (20, 92))
             
             # 顯示警告訊息 (例如：不可送將) - 顯示 2 秒
             if board.warning_msg and time.time() - board.warning_timer < 2.0:
                 warn_text = font_small.render(board.warning_msg, True, WARNING_COLOR)
-                text_rect = warn_text.get_rect(center=(SCREEN_WIDTH//2, 75))
+                text_rect = warn_text.get_rect(center=(SCREEN_WIDTH//2, TOP_UI_HEIGHT - 10))
                 screen.blit(warn_text, text_rect)
 
             # 2. 繪製棋盤
+            if board_surface:
+                screen.blit(board_surface, (MARGIN_X - 5, MARGIN_Y - 5))
             pygame.draw.rect(screen, COLOR_LINE, (MARGIN_X - 5, MARGIN_Y - 5, 8 * GRID_SIZE + 10, 9 * GRID_SIZE + 10), 4)
             for y in range(10):
                 pygame.draw.line(screen, COLOR_LINE, (MARGIN_X, MARGIN_Y + y * GRID_SIZE), (MARGIN_X + 8 * GRID_SIZE, MARGIN_Y + y * GRID_SIZE))
@@ -1622,10 +2288,7 @@ def main():
             screen.blit(font_river.render(right_river, True, COLOR_LINE), (MARGIN_X + 5.5 * GRID_SIZE, MARGIN_Y + 4.2 * GRID_SIZE))
 
             # 3. 繪製移動歷史
-            history_panel_x = MARGIN_X + BOARD_WIDTH + 20
-            history_panel_y = MARGIN_Y
-            history_panel_width = SCREEN_WIDTH - history_panel_x - 30
-            history_panel_height = BOARD_HEIGHT
+            history_panel_x, history_panel_y, history_panel_width, history_panel_height, clip_rect = get_history_panel_rects()
             
             # 繪製背景板
             pygame.draw.rect(screen, (220, 210, 190), (history_panel_x, history_panel_y, history_panel_width, history_panel_height))
@@ -1636,20 +2299,22 @@ def main():
             screen.blit(title_text, (history_panel_x + 5, history_panel_y + 5))
             
             # 計算可顯示的最大偏移量
-            total_lines = len(board.move_notation)
-            max_scroll = max(0, total_lines * 25 - (history_panel_height - 40))
+            notation_list = get_display_notation_list()
+            total_lines = len(notation_list)
+            max_scroll = get_history_max_scroll()
             if history_scroll:
                 history_scroll.content_height = total_lines * 25 + 40
             
             # 使用裁剪區域限制繪製範圍
-            clip_rect = pygame.Rect(history_panel_x, history_panel_y + 35, history_panel_width - 15, history_panel_height - 35)
             screen.set_clip(clip_rect)
             
             # 顯示每一步移動，使用滾動偏移
             scroll_offset = history_scroll.scroll_offset if history_scroll else 0
             y_offset = history_panel_y + 35 - scroll_offset
             
-            for i, notation in enumerate(board.move_notation):
+            for i, notation in enumerate(notation_list):
+                if replay_mode_active and replay_index == i + 1:
+                    pygame.draw.rect(screen, (255, 236, 180), (history_panel_x + 2, y_offset - 1, history_panel_width - 20, 23))
                 # 紅方和黑方交替顯示
                 move_color = RED if i % 2 == 0 else BLACK
                 move_text = font_small.render(f"{i+1}. {notation}", True, move_color)
@@ -1665,7 +2330,7 @@ def main():
 
             # 4. 繪製棋子
             for p in board.pieces:
-                p.draw(screen, font, view_color)
+                draw_piece_with_assets(screen, p, font, view_color, piece_sprites)
 
             # 5. 繪製建議著法高亮
             if suggest_enabled and suggest_move and len(suggest_move) >= 4:
@@ -1687,6 +2352,22 @@ def main():
                 btn_undo.update_hover(mouse_pos)
                 btn_undo.draw(screen, font_small)
 
+            if btn_save_game and not board.winner and not board.draw_reason:
+                btn_save_game.update_hover(mouse_pos)
+                btn_save_game.draw(screen, font_small)
+
+            if btn_load_game and not board.winner and not board.draw_reason:
+                btn_load_game.update_hover(mouse_pos)
+                btn_load_game.draw(screen, font_small)
+
+            if btn_draw_offer and not board.winner and not board.draw_reason and not replay_mode_active:
+                btn_draw_offer.update_hover(mouse_pos)
+                btn_draw_offer.draw(screen, font_small)
+
+            if btn_replay_mode and (board.winner or board.draw_reason or replay_mode_active):
+                btn_replay_mode.update_hover(mouse_pos)
+                btn_replay_mode.draw(screen, font_small)
+
             if btn_main_menu:
                 btn_main_menu.update_hover(mouse_pos)
                 btn_main_menu.draw(screen, font_small)
@@ -1694,10 +2375,22 @@ def main():
             if btn_suggest_toggle and not board.winner and not board.draw_reason:
                 btn_suggest_toggle.update_hover(mouse_pos)
                 btn_suggest_toggle.draw(screen, font_small)
-            
-            if btn_return_menu and (board.winner or board.draw_reason):
-                btn_return_menu.update_hover(mouse_pos)
-                btn_return_menu.draw(screen, font_small)
+
+            if draw_offer_popup and btn_draw_accept and btn_draw_reject:
+                overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+                overlay.fill((0, 0, 0, 110))
+                screen.blit(overlay, (0, 0))
+                popup_rect = pygame.Rect(SCREEN_WIDTH // 2 - 220, SCREEN_HEIGHT // 2 - 110, 440, 220)
+                pygame.draw.rect(screen, (245, 233, 205), popup_rect)
+                pygame.draw.rect(screen, COLOR_LINE, popup_rect, 3)
+                requester = "紅方" if draw_offer_popup["from_color"] == RED else "黑方"
+                msg = font.render(f"{requester}提出求和，是否接受？", True, COLOR_LINE)
+                msg_rect = msg.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 25))
+                screen.blit(msg, msg_rect)
+                btn_draw_accept.update_hover(mouse_pos)
+                btn_draw_reject.update_hover(mouse_pos)
+                btn_draw_accept.draw(screen, font_small)
+                btn_draw_reject.draw(screen, font_small)
 
         pygame.display.flip()
         clock.tick(30)
