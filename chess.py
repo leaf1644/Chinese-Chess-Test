@@ -2069,6 +2069,8 @@ def main():
                         suggest_enabled = not suggest_enabled
                         btn_suggest_toggle.text = "建議著法：開" if suggest_enabled else "建議著法：關"
                         reset_suggest_state(reset_display=True)
+                        if not suggest_enabled:
+                            reset_eval_state(reset_display=True)
                     elif btn_undo and btn_undo.is_clicked(mouse_pos):
                         if board.undo_last_move():
                             board.selected_piece = None
@@ -2142,8 +2144,8 @@ def main():
                     ai_enabled = False
                     board.set_warning("AI 引擎初始化失敗")
 
-        # --- 即時評估 ---
-        if game_state in (MODE_PVP, MODE_AI) and board and eval_enabled:
+        # --- 即時評估（僅在建議著法開啟時） ---
+        if game_state in (MODE_PVP, MODE_AI) and board and eval_enabled and suggest_enabled and not board.winner and not board.draw_reason:
             current_fen = board.to_fen()
             if eval_request_id is None and current_fen != eval_last_fen_requested:
                 if ensure_engine():
@@ -2153,6 +2155,8 @@ def main():
                 else:
                     eval_enabled = False
                     board.set_warning("評估引擎初始化失敗")
+        elif not suggest_enabled:
+            reset_eval_state(reset_display=True)
 
         # --- 建議著法 ---
         if game_state in (MODE_PVP, MODE_AI) and board and suggest_enabled and not board.winner and not board.draw_reason:
@@ -2224,11 +2228,13 @@ def main():
             screen.blit(font_small.render(mode_text, True, WHITE), (20, 52))
 
             eval_x = 730
-            screen.blit(font_small.render("紅方評分", True, WHITE), (eval_x, 10))
-            screen.blit(font_eval.render(eval_text, True, GOLD), (eval_x, 34))
-
-            sugg_text = f"建議: {suggest_move}" if (suggest_enabled and suggest_move) else "建議: --"
-            screen.blit(font_small.render(sugg_text, True, WHITE), (eval_x, 92))
+            if suggest_enabled:
+                screen.blit(font_small.render("建議著法（含評分）", True, WHITE), (eval_x, 10))
+                sugg_text = f"建議: {suggest_move}" if suggest_move else "建議: --"
+                screen.blit(font_small.render(sugg_text, True, WHITE), (eval_x, 44))
+                screen.blit(font_small.render(f"評分: {eval_text}", True, GOLD), (eval_x, 76))
+            else:
+                screen.blit(font_small.render("建議著法：關", True, WHITE), (eval_x, 44))
             
             # 狀態顯示 (將軍 / 勝利 / 正常)
             if replay_mode_active:
