@@ -1527,20 +1527,20 @@ def main():
             return False
         capture_finished_record_if_needed()
         if not replay_record_notation and not replay_record_moves:
-            board.set_warning("沒有可復盤的棋譜")
+            board.set_warning("沒有可複盤的棋譜")
             return False
 
         if step_idx is None:
             step_idx = len(replay_record_moves)
         if not restore_game_to_step(step_idx, source_moves=replay_record_moves):
-            board.set_warning("進入復盤模式失敗")
+            board.set_warning("進入複盤模式失敗")
             return False
 
         replay_mode_active = True
         ai_enabled = False
         if btn_replay_mode:
-            btn_replay_mode.text = "復盤中"
-        board.set_warning(f"已進入復盤模式（第 {step_idx} 手）")
+            btn_replay_mode.text = "複盤中"
+        board.set_warning(f"已進入複盤模式（第 {step_idx} 手）")
         return True
 
     def color_to_str(color):
@@ -1562,7 +1562,7 @@ def main():
         btn_save_game = Button(10, SCREEN_HEIGHT - 40, 150, 35, "存檔")
         btn_load_game = Button(810, SCREEN_HEIGHT - 40, 180, 35, "讀檔")
         btn_draw_offer = Button(915, 12, 170, 32, "求和")
-        btn_replay_mode = Button(915, 50, 170, 32, "復盤模式")
+        btn_replay_mode = Button(915, 50, 170, 32, "複盤模式")
 
     def start_new_game(mode, human_side=RED):
         nonlocal game_state, board, history_scroll
@@ -2037,25 +2037,25 @@ def main():
 
                     if event.button == 1 and btn_replay_mode and btn_replay_mode.is_clicked(mouse_pos):
                         if replay_mode_active:
-                            board.set_warning("已在復盤模式")
+                            board.set_warning("已在複盤模式")
                         elif board.winner or board.draw_reason:
                             enter_replay_mode()
                         else:
-                            board.set_warning("對局尚未結束，暫不可進入復盤模式")
+                            board.set_warning("對局尚未結束，暫不可進入複盤模式")
                         continue
 
-                    # 未進入復盤模式時，終局局面不可直接操作棋子。
+                    # 未進入複盤模式時，終局局面不可直接操作棋子。
                     if (board.winner or board.draw_reason) and not replay_mode_active:
                         continue
 
-                    # 復盤模式下可點譜跳局面，但不影響原終局棋譜。
+                    # 複盤模式下可點譜跳局面，但不影響原終局棋譜。
                     if replay_mode_active and event.button == 1:
                         idx = get_notation_index_at_pos(mouse_pos)
                         if idx is not None:
                             if restore_game_to_step(idx + 1, source_moves=replay_record_moves):
-                                board.set_warning(f"復盤跳轉：第 {idx + 1} 手")
+                                board.set_warning(f"複盤跳轉：第 {idx + 1} 手")
                             else:
-                                board.set_warning("復盤跳轉失敗")
+                                board.set_warning("複盤跳轉失敗")
                             continue
 
                     # 以下是未結束遊戲時的操作
@@ -2257,10 +2257,10 @@ def main():
                     screen.blit(font_warn.render("將軍！", True, GOLD), (250, 10))
 
             if replay_mode_active:
-                rv_text = font_small.render("復盤模式：可點譜跳步、可繼續下棋，且不影響原棋譜", True, GOLD)
+                rv_text = font_small.render("複盤模式：可點譜跳步、可繼續下棋，且不影響原棋譜", True, GOLD)
                 screen.blit(rv_text, (20, 92))
             elif board.winner or board.draw_reason:
-                rv_text = font_small.render("對局已結束，按「復盤模式」可開始分析", True, GOLD)
+                rv_text = font_small.render("對局已結束，按「複盤模式」可開始分析", True, GOLD)
                 screen.blit(rv_text, (20, 92))
             
             # 顯示警告訊息 (例如：不可送將) - 顯示 2 秒
