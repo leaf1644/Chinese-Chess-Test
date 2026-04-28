@@ -9,6 +9,65 @@ import math
 import random
 import json
 
+
+def get_runtime_search_dirs():
+    dirs = []
+
+    def add(path):
+        if path and path not in dirs:
+            dirs.append(path)
+
+    module_dir = os.path.dirname(os.path.abspath(__file__))
+    add(module_dir)
+
+    if getattr(sys, "frozen", False):
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        add(exe_dir)
+        add(os.path.join(exe_dir, "_internal"))
+
+    add(getattr(sys, "_MEIPASS", ""))
+    return dirs
+
+
+def get_initial_window_size():
+    info = pygame.display.Info()
+    available_width = max(320, info.current_w - 80)
+    available_height = max(240, info.current_h - 120)
+    scale = min(available_width / SCREEN_WIDTH, available_height / SCREEN_HEIGHT, 1.0)
+    return (
+        max(320, int(SCREEN_WIDTH * scale)),
+        max(240, int(SCREEN_HEIGHT * scale)),
+    )
+
+
+def get_render_rect(window_size):
+    window_width, window_height = window_size
+    scale = min(window_width / SCREEN_WIDTH, window_height / SCREEN_HEIGHT)
+    render_width = max(1, int(SCREEN_WIDTH * scale))
+    render_height = max(1, int(SCREEN_HEIGHT * scale))
+    return pygame.Rect(
+        (window_width - render_width) // 2,
+        (window_height - render_height) // 2,
+        render_width,
+        render_height,
+    )
+
+
+def window_to_logical_pos(pos, render_rect):
+    if render_rect.width <= 0 or render_rect.height <= 0:
+        return (-1, -1)
+
+    x, y = pos
+    if not render_rect.collidepoint(x, y):
+        return (-1, -1)
+
+    logical_x = int((x - render_rect.x) * SCREEN_WIDTH / render_rect.width)
+    logical_y = int((y - render_rect.y) * SCREEN_HEIGHT / render_rect.height)
+    return (
+        max(0, min(SCREEN_WIDTH - 1, logical_x)),
+        max(0, min(SCREEN_HEIGHT - 1, logical_y)),
+    )
+
 # --- 1. 系統常數 ---
 SCREEN_WIDTH = 1100
 SCREEN_HEIGHT = 900
@@ -139,9 +198,16 @@ def create_generated_piece_sprite(piece_name, piece_color, font_names):
 
 
 def load_visual_assets(font_names):
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = next(iter(get_runtime_search_dirs()), os.path.dirname(os.path.abspath(__file__)))
     assets_dir = os.path.join(base_dir, "assets")
     pieces_dir = os.path.join(assets_dir, "pieces")
+
+    for candidate_base in get_runtime_search_dirs():
+        candidate_assets = os.path.join(candidate_base, "assets")
+        if os.path.isdir(candidate_assets):
+            assets_dir = candidate_assets
+            pieces_dir = os.path.join(candidate_assets, "pieces")
+            break
 
     board_surface = None
     board_candidates = [
@@ -1082,14 +1148,17 @@ class PikafishEngine:
         desktop = os.path.join(home, "Desktop")
         onedrive_desktop = os.path.join(home, "OneDrive", "Desktop")
 
-        base = os.path.dirname(os.path.abspath(__file__))
+        for base in get_runtime_search_dirs():
+            candidates.extend([
+                os.path.join(base, "pikafish.exe"),
+                os.path.join(base, "pikafish"),
+                os.path.join(base, "engines", "pikafish.exe"),
+                os.path.join(base, "engines", "pikafish"),
+                os.path.join(base, "Pikafish", "pikafish.exe"),
+                os.path.join(base, "Pikafish", "pikafish"),
+            ])
+
         candidates.extend([
-            os.path.join(base, "pikafish.exe"),
-            os.path.join(base, "pikafish"),
-            os.path.join(base, "engines", "pikafish.exe"),
-            os.path.join(base, "engines", "pikafish"),
-            os.path.join(base, "Pikafish", "pikafish.exe"),
-            os.path.join(base, "Pikafish", "pikafish"),
             os.path.join(desktop, "pikafish.exe"),
             os.path.join(desktop, "pikafish"),
             os.path.join(onedrive_desktop, "pikafish.exe"),
@@ -1324,7 +1393,9 @@ def apply_ucci_move(board, move_str):
 
 def main():
     pygame.init()
-    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+    window = pygame.display.set_mode(get_initial_window_size(), pygame.RESIZABLE)
+    render_rect = get_render_rect(window.get_size())
+    screen = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
     pygame.display.set_caption("中國象棋 Ver 3.1 (Pikafish 難度 + 可替換素材)")
     clock = pygame.time.Clock()
     
@@ -1951,12 +2022,17 @@ def main():
     btn_replay_mode = None
     
     while True:
-        mouse_pos = pygame.mouse.get_pos()
+        mouse_pos = window_to_logical_pos(pygame.mouse.get_pos(), render_rect)
         
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 stop_engine()
                 pygame.quit(); sys.exit()
+            if event.type == pygame.VIDEORESIZE:
+                resized = (max(320, event.w), max(240, event.h))
+                window = pygame.display.set_mode(resized, pygame.RESIZABLE)
+                render_rect = get_render_rect(window.get_size())
+                continue
             # 鍵盤事件：按 D 鍵可切換 debug 日誌（臨時，用於排查長捉/長將）
             if event.type == pygame.KEYDOWN and (game_state == MODE_PVP or game_state == MODE_AI):
                 if event.key == pygame.K_d and board:
@@ -2398,6 +2474,12 @@ def main():
                 btn_draw_accept.draw(screen, font_small)
                 btn_draw_reject.draw(screen, font_small)
 
+        window.fill(COLOR_BG)
+        if render_rect.size == (SCREEN_WIDTH, SCREEN_HEIGHT):
+            window.blit(screen, render_rect.topleft)
+        else:
+            scaled_frame = pygame.transform.smoothscale(screen, render_rect.size)
+            window.blit(scaled_frame, render_rect.topleft)
         pygame.display.flip()
         clock.tick(30)
 
