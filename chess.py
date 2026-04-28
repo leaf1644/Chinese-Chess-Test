@@ -1177,13 +1177,19 @@ class PikafishEngine:
                 break
             self.queue.put(line.strip())
 
+    def _format_start_error(self, message, startup_lines):
+        details = [f"{message} (path={self.engine_path})"]
+        if startup_lines:
+            details.append("輸出=" + " | ".join(startup_lines[-8:]))
+        return "；".join(details)
+
     def _send(self, cmd):
         if not self.process or self.process.poll() is not None:
             raise RuntimeError("Pikafish process is not running")
         self.process.stdin.write(cmd + "\n")
         self.process.stdin.flush()
 
-    def _wait_for(self, predicate, timeout_sec):
+    def _wait_for(self, predicate, timeout_sec, seen_lines=None):
         deadline = time.time() + timeout_sec
         while time.time() < deadline:
             remain = max(0.01, deadline - time.time())
@@ -1191,6 +1197,8 @@ class PikafishEngine:
                 line = self.queue.get(timeout=remain)
             except queue.Empty:
                 continue
+            if seen_lines is not None:
+                seen_lines.append(line)
             if predicate(line):
                 return line
         return None
@@ -1201,6 +1209,13 @@ class PikafishEngine:
         engine_cwd = None
         if os.path.isabs(self.engine_path):
             engine_cwd = os.path.dirname(self.engine_path) or None
+        creationflags = 0
+        startupinfo = None
+        if os.name == "nt":
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 0
         self.process = subprocess.Popen(
             [self.engine_path],
             cwd=engine_cwd,
@@ -1211,19 +1226,22 @@ class PikafishEngine:
             encoding="utf-8",
             errors="replace",
             bufsize=1,
+            creationflags=creationflags,
+            startupinfo=startupinfo,
         )
         self.reader_thread = threading.Thread(target=self._reader, daemon=True)
         self.reader_thread.start()
 
+        startup_lines = []
         self._send("uci")
-        if not self._wait_for(lambda s: s == "uciok", 5):
-            raise RuntimeError("Pikafish 啟動失敗：沒有收到 uciok")
+        if not self._wait_for(lambda s: s == "uciok", 5, startup_lines):
+            raise RuntimeError(self._format_start_error("Pikafish 啟動失敗：沒有收到 uciok", startup_lines))
         self._send("isready")
-        if not self._wait_for(lambda s: s == "readyok", 5):
-            raise RuntimeError("Pikafish 啟動失敗：沒有收到 readyok")
+        if not self._wait_for(lambda s: s == "readyok", 5, startup_lines):
+            raise RuntimeError(self._format_start_error("Pikafish 啟動失敗：沒有收到 readyok", startup_lines))
         self._send("ucinewgame")
         self._send("isready")
-        self._wait_for(lambda s: s == "readyok", 5)
+        self._wait_for(lambda s: s == "readyok", 5, startup_lines)
 
     def _build_go_command(self, movetime_ms=None, depth=None):
         parts = []
@@ -1307,11 +1325,10 @@ class PikafishEngine:
             return
         proc = self.process
         reader_thread = self.reader_thread
-        self.process = None
-        self.reader_thread = None
         try:
             if proc.poll() is None:
-                self._send("quit")
+                proc.stdin.write("quit\n")
+                proc.stdin.flush()
         except Exception:
             pass
         try:
@@ -1341,6 +1358,8 @@ class PikafishEngine:
             pass
         if reader_thread and reader_thread.is_alive():
             reader_thread.join(timeout=0.5)
+        self.process = None
+        self.reader_thread = None
 
 
 class EngineDispatcher:
