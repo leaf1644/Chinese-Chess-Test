@@ -1198,8 +1198,12 @@ class PikafishEngine:
     def start(self):
         if self.process and self.process.poll() is None:
             return
+        engine_cwd = None
+        if os.path.isabs(self.engine_path):
+            engine_cwd = os.path.dirname(self.engine_path) or None
         self.process = subprocess.Popen(
             [self.engine_path],
+            cwd=engine_cwd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -1301,16 +1305,42 @@ class PikafishEngine:
     def stop(self):
         if not self.process:
             return
+        proc = self.process
+        reader_thread = self.reader_thread
+        self.process = None
+        self.reader_thread = None
         try:
-            if self.process.poll() is None:
+            if proc.poll() is None:
                 self._send("quit")
         except Exception:
             pass
         try:
-            self.process.terminate()
+            if proc.stdin:
+                proc.stdin.close()
         except Exception:
             pass
-        self.process = None
+        try:
+            if proc.poll() is None:
+                proc.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.terminate()
+                proc.wait(timeout=1.0)
+            except Exception:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=1.0)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            if proc.stdout:
+                proc.stdout.close()
+        except Exception:
+            pass
+        if reader_thread and reader_thread.is_alive():
+            reader_thread.join(timeout=0.5)
 
 
 class EngineDispatcher:
