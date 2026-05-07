@@ -1,7 +1,7 @@
-# Chinese-Chess-Test
-A Chinese Chess App created by AI. <br><br>
-User can find the ChineseChess.exe in dist/ChineseChess folder and run the app<br>
-User can download the source code and modify them to make change of the app. <br><br>
-After modification, user can use build.exe.bat to build a new exe.<br>
-To run the app not using exe, please put chess.py,pikafish.exe and pikafish.nnue together into a folder and run the app in terminal.<br>
-You have to use python to open the app without using exe.<br>
+# 中國象棋測試版 (Chinese-Chess-Test)
+由 AI 開發的中國象棋應用程式。<br><br>
+使用者可在 dist/ChineseChess 資料夾中找到 ChineseChess.exe 並直接執行。<br>
+使用者也可下載原始碼自行修改。<br><br>
+修改完成後，可使用 build_exe.bat 重新打包成新的 exe 執行檔。<br>
+若不使用 exe，請將 chess.py、pikafish.exe 及 pikafish.nnue 放在同一資料夾中，並在終端機以 Python 執行。<br>
+不使用 exe 時，必須透過 Python 開啟此應用程式。<br>
