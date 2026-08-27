@@ -62,6 +62,7 @@ from xiangqi.constants import (  # noqa: F401
 from xiangqi.result import GameResult, ResultKind  # noqa: F401
 from xiangqi.endgame import (  # noqa: F401
     is_endgame_unlocked,
+    is_unlocked_in_sequence,
     load_endgame_progress,
     load_endgames_catalog,
     save_endgame_progress,

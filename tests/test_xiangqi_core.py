@@ -492,6 +492,50 @@ class TestEndgameCatalog(unittest.TestCase):
         self.assertFalse(hasattr(gen, "CANDIDATES"))
 
 
+class TestEndgameUnlock(unittest.TestCase):
+    def test_clearing_previous_unlocks_next_in_same_list(self):
+        levels = [
+            {"id": "a", "unlock_after": None},
+            {"id": "b", "unlock_after": "other_group_id"},
+            {"id": "c", "unlock_after": "still_other"},
+        ]
+        cleared = set()
+        self.assertTrue(app.is_unlocked_in_sequence(levels, 0, cleared))
+        self.assertFalse(app.is_unlocked_in_sequence(levels, 1, cleared))
+        cleared.add("a")
+        self.assertTrue(app.is_unlocked_in_sequence(levels, 1, cleared))
+        self.assertFalse(app.is_unlocked_in_sequence(levels, 2, cleared))
+        cleared.add("b")
+        self.assertTrue(app.is_unlocked_in_sequence(levels, 2, cleared))
+
+    def test_cleared_level_stays_open(self):
+        levels = [{"id": "a"}, {"id": "b"}]
+        self.assertTrue(app.is_unlocked_in_sequence(levels, 1, {"b"}))
+
+    def test_catalog_beginner_list_ignores_cross_group_unlock_after(self):
+        """定式入門／初級列表依畫面順序解鎖，不被 unlock_after 指向高級關卡住。"""
+        levels, err = app.load_endgames_catalog()
+        self.assertIsNone(err)
+        beginner_diffs = (1, 2)
+        filtered = sorted(
+            [
+                lv for lv in levels
+                if lv.get("section") == app.ENDGAME_SECTION_FORMULA
+                and int(lv.get("difficulty") or 1) in beginner_diffs
+            ],
+            key=lambda lv: (int(lv.get("difficulty") or 1), str(lv.get("id") or "")),
+        )
+        self.assertGreaterEqual(len(filtered), 3)
+        eg013 = next(lv for lv in filtered if lv["id"] == "eg_013")
+        self.assertEqual(eg013.get("unlock_after"), "eg_006")
+        idx = next(i for i, lv in enumerate(filtered) if lv["id"] == "eg_013")
+        prev = {filtered[idx - 1]["id"]}
+        self.assertFalse(app.is_endgame_unlocked(eg013, prev))
+        self.assertTrue(app.is_unlocked_in_sequence(filtered, idx, prev))
+        self.assertTrue(app.is_unlocked_in_sequence(filtered, 0, set()))
+        self.assertTrue(app.is_unlocked_in_sequence(filtered, 1, {filtered[0]["id"]}))
+
+
 class TestSavePayload(unittest.TestCase):
     def test_corrupt_save_does_not_crash_load_helpers(self):
         # 僅驗證 json 錯誤可被捕獲的模式（load_game 在 main 內，此處測 progress）

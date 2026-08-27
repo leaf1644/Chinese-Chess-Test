@@ -55,7 +55,7 @@ from xiangqi.engine import (
     EngineDispatcher,
 )
 from xiangqi.endgame import (
-    is_endgame_unlocked,
+    is_unlocked_in_sequence,
     load_endgame_progress,
     load_endgames_catalog,
     save_endgame_progress,
@@ -1081,7 +1081,7 @@ class GameApp:
             key=lambda lv: (int(lv.get("difficulty") or 1), str(lv.get("id") or "")),
         )
         for i, level in enumerate(filtered):
-            unlocked = is_endgame_unlocked(level, self.endgame_cleared)
+            unlocked = is_unlocked_in_sequence(filtered, i, self.endgame_cleared)
             cleared = level["id"] in self.endgame_cleared
             mark = t("cleared_tag") if cleared else (t("locked_tag") if not unlocked else f"{i+1:02d}")
             sub = difficulty_label(int(level.get("difficulty") or 1))

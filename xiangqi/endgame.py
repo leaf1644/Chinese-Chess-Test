@@ -91,8 +91,22 @@ def save_endgame_progress(progress, path=None):
 
 
 def is_endgame_unlocked(level, cleared_ids):
+    """依 unlock_after 欄位（跨關卡 DAG）。列表解鎖請用 is_unlocked_in_sequence。"""
     req = level.get("unlock_after")
     if not req:
         return True
     return str(req) in cleared_ids
+
+
+def is_unlocked_in_sequence(levels, index, cleared_ids):
+    """同一畫面列表內：第一關可打；其後須已通關上一關。已通關的關永遠可再進。"""
+    if index < 0 or index >= len(levels):
+        return False
+    lv_id = str(levels[index].get("id") or "")
+    if lv_id in cleared_ids:
+        return True
+    if index == 0:
+        return True
+    prev_id = str(levels[index - 1].get("id") or "")
+    return prev_id in cleared_ids
 

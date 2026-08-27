@@ -79,6 +79,19 @@ from ui.widgets import Button
 from .base import Screen
 
 
+def _start_clicked_endgame_level(app, mouse_pos):
+    """點到哪一列就開哪一關；略過捲出畫面的列，不可提前 return。"""
+    for btn, payload in app.endgame_level_buttons:
+        if btn.rect.bottom <= ENDGAME_LIST_TOP or btn.rect.top >= ENDGAME_LIST_BOTTOM:
+            continue
+        if not btn.is_clicked(mouse_pos):
+            continue
+        if payload == "locked":
+            return
+        app.start_endgame_level(payload)
+        return
+
+
 class EndgameDiffScreen(Screen):
     mode_id = MODE_ENDGAME_DIFF
 
@@ -161,26 +174,9 @@ class EndgameLevelsScreen(Screen):
                     if app.endgame_list_scrollbar.is_dragging:
                         pass
                     elif list_rect.collidepoint(mouse_pos):
-                        for btn, payload in app.endgame_level_buttons:
-                            # 只接受可見區域內的點擊
-                            if btn.rect.bottom <= ENDGAME_LIST_TOP or btn.rect.top >= ENDGAME_LIST_BOTTOM:
-                                return
-                            if not btn.is_clicked(mouse_pos):
-                                return
-                            if payload == "locked":
-                                break
-                            app.start_endgame_level(payload)
-                            break
+                        _start_clicked_endgame_level(app, mouse_pos)
                 elif list_rect.collidepoint(mouse_pos):
-                    for btn, payload in app.endgame_level_buttons:
-                        if btn.rect.bottom <= ENDGAME_LIST_TOP or btn.rect.top >= ENDGAME_LIST_BOTTOM:
-                            return
-                        if not btn.is_clicked(mouse_pos):
-                            return
-                        if payload == "locked":
-                            break
-                        app.start_endgame_level(payload)
-                        break
+                    _start_clicked_endgame_level(app, mouse_pos)
         elif event.type == pygame.MOUSEMOTION:
             if app.endgame_list_scrollbar and app.endgame_list_scrollbar.is_dragging:
                 app.endgame_list_scrollbar.handle_drag(mouse_pos, app.endgame_list_max_scroll())
