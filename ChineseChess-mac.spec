@@ -15,7 +15,7 @@ a = Analysis(
         ('endgames.json', '.'),
         ('language.json', '.'),
     ],
-    hiddenimports=[],
+    hiddenimports=['xiangqi', 'xiangqi.i18n', 'xiangqi.engine', 'xiangqi.paths'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

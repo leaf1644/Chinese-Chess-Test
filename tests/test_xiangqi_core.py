@@ -270,12 +270,11 @@ class TestUserDataPaths(unittest.TestCase):
     def test_language_pref_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "language.json")
-            with mock.patch.object(app, "get_user_data_path", return_value=path):
-                with mock.patch.object(app, "get_user_data_dir", return_value=tmp):
-                    ok, err = app.save_language_pref(app.LANG_HANS)
-                    self.assertTrue(ok, err)
-                    lang = app.load_language_pref()
-                    self.assertEqual(lang, app.LANG_HANS)
+            with mock.patch("xiangqi.paths.get_user_data_path", return_value=path):
+                ok, err = app.save_language_pref(app.LANG_HANS)
+                self.assertTrue(ok, err)
+                lang = app.load_language_pref()
+                self.assertEqual(lang, app.LANG_HANS)
 
     def test_endgame_progress_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp:
