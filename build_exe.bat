@@ -29,9 +29,15 @@ set EXTRA_ARGS=
 if exist "pikafish.exe" set EXTRA_ARGS=%EXTRA_ARGS% --add-data "pikafish.exe;."
 if exist "pikafish.nnue" set EXTRA_ARGS=%EXTRA_ARGS% --add-data "pikafish.nnue;."
 if exist "assets" set EXTRA_ARGS=%EXTRA_ARGS% --add-data "assets;assets"
+if exist "endgames.json" set EXTRA_ARGS=%EXTRA_ARGS% --add-data "endgames.json;."
+if exist "language.json" set EXTRA_ARGS=%EXTRA_ARGS% --add-data "language.json;."
 
 echo [3/4] Building EXE...
-python -m PyInstaller --noconfirm --clean --windowed --name ChineseChess %EXTRA_ARGS% chess.py
+if exist "ChineseChess.spec" (
+  python -m PyInstaller --noconfirm --clean ChineseChess.spec
+) else (
+  python -m PyInstaller --noconfirm --clean --windowed --name ChineseChess %EXTRA_ARGS% chess.py
+)
 if errorlevel 1 (
   echo Build failed.
   exit /b 1

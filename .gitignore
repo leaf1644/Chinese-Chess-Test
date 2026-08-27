@@ -1,3 +1,15 @@
 __pycache__/
-build/
 *.pyc
+*.pyo
+build/
+.grok/
+.venv/
+venv/
+env/
+
+# 本機對局／進度／語言偏好（寫入使用者資料目錄；勿提交）
+savegame.json
+endgame_progress.json
+language.json
+editor_positions.json
+custom_positions.json
