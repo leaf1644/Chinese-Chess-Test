@@ -79,7 +79,7 @@ class TestPieceMoves(unittest.TestCase):
         self.assertTrue(board.is_valid_move(cannon, 4, 6))
         # 有兵作炮架才能打到將線上的將？將在 (4,0)，兵 (4,4)，炮 (4,8)
         # 中間恰好一子，可打將
-        self.assertTrue(board.is_valid_move(cannon, 4, 0, check_simulation=True))
+        self.assertTrue(board.is_valid_move(cannon, 4, 0))
 
     def test_knight_blocked_by_leg(self):
         fen = "4k4/9/9/9/9/9/9/4P4/4N4/4K4 w - - 0 1"
@@ -114,15 +114,53 @@ class TestCheckAndMate(unittest.TestCase):
     def test_cannot_leave_own_king_in_check(self):
         fen = "4k4/9/9/9/9/9/9/9/4R4/4K4 b - - 0 1"
         board = app.XiangqiBoard(fen=fen)
-        # 黑將被紅車將軍，若將橫移到不被車打到的格
         king = board.get_king(app.BLACK)
-        # 走到 (3,0) 仍可能被車打不到如果車在 e 線... 車在 (4,8) 打 e 線
         self.assertTrue(board.is_under_attack(app.BLACK))
-        # 將往 (5,0) 仍在車線外? (5,0) is f9 - not on e file, should escape
-        moved = board.move_piece(king, 5, 0)
-        # 若 (5,0) 安全應成功
-        if moved:
-            self.assertFalse(board.is_under_attack(app.BLACK))
+        # 沿車線走仍被將
+        self.assertFalse(board.would_be_legal_move(king, 4, 1))
+        self.assertFalse(board.move_piece(king, 4, 1))
+        self.assertEqual(king.x, 4)
+        self.assertEqual(king.y, 0)
+        # 橫移離開車線可解將
+        self.assertTrue(board.would_be_legal_move(king, 5, 0))
+        self.assertTrue(board.move_piece(king, 5, 0))
+        self.assertFalse(board.is_under_attack(app.BLACK))
+
+
+class TestSimulateMove(unittest.TestCase):
+    def test_simulate_restores_on_exception(self):
+        board = app.XiangqiBoard()
+        fen = board.to_fen()
+        n = len(board.pieces)
+        pawn = None
+        for p in board.pieces:
+            if p.color == app.RED and p.name == "兵" and board.is_valid_move(p, p.x, p.y - 1):
+                pawn = p
+                break
+        self.assertIsNotNone(pawn)
+        with self.assertRaises(RuntimeError):
+            with board._simulate_move(pawn, pawn.x, pawn.y - 1):
+                raise RuntimeError("boom")
+        self.assertEqual(board.to_fen(), fen)
+        self.assertEqual(len(board.pieces), n)
+
+    def test_legal_moves_ucci_start_position(self):
+        board = app.XiangqiBoard()
+        red = board.legal_moves_ucci(app.RED)
+        self.assertGreater(len(red), 10)
+        self.assertTrue(all(len(mv) >= 4 for mv in red))
+        self.assertTrue(board.has_valid_move(app.RED))
+        self.assertTrue(board.has_valid_move(app.BLACK))
+
+    def test_has_valid_move_false_when_mated(self):
+        # 馬後炮將死後輪到黑
+        fen = "4k4/9/4N4/9/9/9/9/9/9/3C1K3 w - - 0 1"
+        board = app.XiangqiBoard(fen=fen)
+        cannon = board.get_piece_at(3, 9)
+        self.assertTrue(board.move_piece(cannon, 4, 9))
+        self.assertEqual(board.winner, app.RED)
+        self.assertFalse(board.has_valid_move(app.BLACK))
+        self.assertEqual(board.legal_moves_ucci(app.BLACK), [])
 
 
 class TestRepeatAndLongRules(unittest.TestCase):

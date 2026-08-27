@@ -8,6 +8,7 @@ import queue
 import math
 import random
 import json
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 
@@ -1711,70 +1712,88 @@ class XiangqiBoard:
             self.winner = mover.color
         return repeat_state_key
 
+    def _displace(self, piece, tx, ty):
+        """把棋子移到 (tx, ty) 並移除被吃子。回傳 ((old_x, old_y), captured_or_None)。"""
+        orig = (piece.x, piece.y)
+        captured = self.get_piece_at(tx, ty)
+        if captured is piece:
+            captured = None
+        piece.x = tx
+        piece.y = ty
+        if captured:
+            self.pieces.remove(captured)
+        return orig, captured
+
+    @contextmanager
+    def _simulate_move(self, piece, tx, ty):
+        """暫時走到 (tx, ty)（含吃子）；離開 with 時一定還原。"""
+        orig, captured = self._displace(piece, tx, ty)
+        try:
+            yield captured
+        finally:
+            piece.x, piece.y = orig
+            if captured:
+                self.pieces.append(captured)
+
+    def _is_self_safe(self, color):
+        return (not self.is_under_attack(color)) and (not self.is_kings_facing())
+
+    def would_be_legal_move(self, piece, tx, ty):
+        """幾何可走到，且走完不送將、不照面。"""
+        if not self.is_valid_move(piece, tx, ty):
+            return False
+        with self._simulate_move(piece, tx, ty):
+            return self._is_self_safe(piece.color)
+
+    def legal_moves_ucci(self, color):
+        """指定方所有合法著（UCCI 字串）。"""
+        moves = []
+        for piece in list(self.pieces):
+            if piece.color != color:
+                continue
+            fx, fy = piece.x, piece.y
+            for tx in range(9):
+                for ty in range(10):
+                    if self.would_be_legal_move(piece, tx, ty):
+                        moves.append(board_to_ucci(fx, fy) + board_to_ucci(tx, ty))
+        return moves
+
+    def _is_square_defended(self, square_x, square_y, by_color):
+        """by_color 是否有棋能合法吃到該格。"""
+        occupant = self.get_piece_at(square_x, square_y)
+        for p in list(self.pieces):
+            if p.color != by_color or p is occupant:
+                continue
+            if self.would_be_legal_move(p, square_x, square_y):
+                return True
+        return False
+
     def move_piece(self, piece, target_x, target_y):
         """ 嘗試移動棋子：包含所有規則檢查 """
-        target_piece = self.get_piece_at(target_x, target_y)
-        
-        # --- 1. 備份當前狀態 (Snapshot) ---
         original_x, original_y = piece.x, piece.y
-        removed_piece = target_piece
-        
-        # --- 2. 執行虛擬移動 ---
-        piece.x = target_x
-        piece.y = target_y
-        if target_piece:
-            self.pieces.remove(target_piece)
-            
-        # --- 3. 安全檢查 (Security Check) ---
-        # 檢查 A: 是否導致飛將 (Kings Facing)
-        if self.is_kings_facing():
-            self.undo_move(piece, original_x, original_y, removed_piece)
-            self.set_warning(t("msg_kings_facing"))
-            return False
+        with self._simulate_move(piece, target_x, target_y):
+            if self.is_kings_facing():
+                self.set_warning(t("msg_kings_facing"))
+                return False
+            if self.is_under_attack(piece.color):
+                self.set_warning(t("msg_self_check"))
+                return False
 
-        # 檢查 B: 移動後自己是否仍被將軍 (自殺/沒解將)
-        if self.is_under_attack(piece.color):
-            self.undo_move(piece, original_x, original_y, removed_piece)
-            self.set_warning(t("msg_self_check"))
-            return False
+        _, captured_piece = self._displace(piece, target_x, target_y)
 
-        # --- 4. 確認移動有效 ---
+        # --- 確認移動有效 ---
         piece.selected = False
         self.selected_piece = None
-        self.warning_msg = "" # 清除錯誤訊息
+        self.warning_msg = ""
         
-        is_capture = removed_piece is not None
-        is_rootless = False
-        if is_capture:
-            defended = False
-            if self.debug:
-                print(f"[DEBUG] Checking defenders for {piece.name} at ({piece.x},{piece.y}) against {removed_piece.name}")
-            for p in self.pieces:
-                if p.color == removed_piece.color:
-                    if not self.is_valid_move(p, piece.x, piece.y, check_simulation=True):
-                        if self.debug:
-                            print(f"[DEBUG]   {p.name} at ({p.x},{p.y}): invalid move")
-                        continue
-                    original_px, original_py = p.x, p.y
-                    self.pieces.remove(piece)
-                    p.x = piece.x
-                    p.y = piece.y
-                    is_safe = not self.is_under_attack(p.color)
-                    p.x = original_px
-                    p.y = original_py
-                    self.pieces.append(piece)
-                    if is_safe:
-                        defended = True
-                        if self.debug:
-                            print(f"[DEBUG]   {p.name} at ({original_px},{original_py}): CAN defend (safe)")
-                        break
-                    if self.debug:
-                        print(f"[DEBUG]   {p.name} at ({original_px},{original_py}): invalid (would be attacked)")
-            is_rootless = not defended
+        is_capture = captured_piece is not None
+        is_rootless = bool(
+            is_capture and not self._is_square_defended(piece.x, piece.y, captured_piece.color)
+        )
         if self.debug and is_capture:
             print(f"[DEBUG] capture by {piece.name} id={id(piece)} at ({piece.x},{piece.y}) - is_rootless={is_rootless}")
         
-        if target_piece and target_piece.name in ('帥', '將'):
+        if captured_piece and captured_piece.name in ('帥', '將'):
             self.winner = piece.color
 
         next_turn = BLACK if self.turn == RED else RED
@@ -1789,7 +1808,7 @@ class XiangqiBoard:
             old_y=original_y,
             new_x=target_x,
             new_y=target_y,
-            captured=removed_piece,
+            captured=captured_piece,
             ucci=board_to_ucci(original_x, original_y) + board_to_ucci(target_x, target_y),
             notation=self.generate_move_notation(piece, original_x, original_y, target_x, target_y),
             is_check=is_check,
@@ -1804,13 +1823,6 @@ class XiangqiBoard:
         move.repeat_state_key = self._apply_post_move_rules(piece, next_turn)
         return True
 
-    def undo_move(self, piece, old_x, old_y, removed_piece):
-        """ 還原移動 """
-        piece.x = old_x
-        piece.y = old_y
-        if removed_piece:
-            self.pieces.append(removed_piece)
-
     def is_under_attack(self, color):
         """ 檢查指定顏色的將帥是否正受到攻擊 """
         king = self.get_king(color)
@@ -1821,7 +1833,7 @@ class XiangqiBoard:
         for p in self.pieces:
             if p.color == enemy_color:
                 # 這裡很關鍵：我們檢查敵方棋子 p 能不能移動到 king 的位置
-                if self.is_valid_move(p, king.x, king.y, check_simulation=True):
+                if self.is_valid_move(p, king.x, king.y):
                     return True
         return False
 
@@ -1917,31 +1929,13 @@ class XiangqiBoard:
     
     def has_valid_move(self, color):
         """檢查指定顏色的玩家是否還有有效的移動"""
-        for piece in self.pieces:
-            if piece.color == color:
-                # 嘗試移動到棋盤上所有可能的位置
-                for tx in range(9):
-                    for ty in range(10):
-                        if self.is_valid_move(piece, tx, ty, check_simulation=True):
-                            # 檢查這個移動是否會導致自己被將軍（模擬移動）
-                            target = self.get_piece_at(tx, ty)
-                            original_x, original_y = piece.x, piece.y
-                            
-                            piece.x = tx
-                            piece.y = ty
-                            if target:
-                                self.pieces.remove(target)
-                            
-                            is_safe = (not self.is_under_attack(color)) and (not self.is_kings_facing())
-                            
-                            # 還原
-                            piece.x = original_x
-                            piece.y = original_y
-                            if target:
-                                self.pieces.append(target)
-                            
-                            if is_safe:
-                                return True
+        for piece in list(self.pieces):
+            if piece.color != color:
+                continue
+            for tx in range(9):
+                for ty in range(10):
+                    if self.would_be_legal_move(piece, tx, ty):
+                        return True
         return False
 
     def set_warning(self, msg):
@@ -2119,45 +2113,13 @@ class XiangqiBoard:
         targets = []
 
         for target in list(self.pieces):
-            if target.color != enemy_color:
+            if target.color != enemy_color or target.name in ('帥', '將'):
                 continue
-            if target.name in ('帥', '將'):
+            if not self.would_be_legal_move(attacker, target.x, target.y):
                 continue
-
-            if not self.is_valid_move(attacker, target.x, target.y, check_simulation=True):
-                continue
-
-            original_ax, original_ay = attacker.x, attacker.y
-            self.pieces.remove(target)
-            attacker.x, attacker.y = target.x, target.y
-
-            legal_capture = (not self.is_under_attack(attacker.color)) and (not self.is_kings_facing())
-            defended = False
-
-            if legal_capture:
-                for defender in self.pieces:
-                    if defender.color != enemy_color:
-                        continue
-                    if not self.is_valid_move(defender, attacker.x, attacker.y, check_simulation=True):
-                        continue
-
-                    # 虛擬反吃：防守方移到攻擊方位置，並暫時移除攻擊方
-                    # （否則同一格兩枚棋子會讓 is_under_attack / get_piece_at 失真）
-                    original_dx, original_dy = defender.x, defender.y
-                    self.pieces.remove(attacker)
-                    defender.x, defender.y = attacker.x, attacker.y
-                    safe_recap = (not self.is_under_attack(defender.color)) and (not self.is_kings_facing())
-                    defender.x, defender.y = original_dx, original_dy
-                    self.pieces.append(attacker)
-
-                    if safe_recap:
-                        defended = True
-                        break
-
-            attacker.x, attacker.y = original_ax, original_ay
-            self.pieces.append(target)
-
-            if legal_capture and not defended:
+            with self._simulate_move(attacker, target.x, target.y):
+                defended = self._is_square_defended(attacker.x, attacker.y, enemy_color)
+            if not defended:
                 targets.append(id(target))
 
         targets.sort()
@@ -2188,11 +2150,8 @@ class XiangqiBoard:
         self.set_warning(t("msg_undone"))
         return True
 
-    def is_valid_move(self, piece, tx, ty, check_simulation=False):
-        """ 
-        驗證移動規則 
-        check_simulation: 如果為 True，代表我們只是在運算攻擊範圍，不檢查'是否會送將' (避免無限迴圈)
-        """
+    def is_valid_move(self, piece, tx, ty):
+        """幾何能否走到 (tx, ty)。不含送將／照面；完整合法性用 would_be_legal_move。"""
         dx, dy = tx - piece.x, ty - piece.y
         adx, ady = abs(dx), abs(dy)
 
@@ -4421,41 +4380,6 @@ def main():
             else:
                 board.set_warning(t("msg_draw_ai_reject"))
 
-    def collect_legal_ucci_moves(color):
-        if not board:
-            return []
-
-        moves = []
-        for piece in list(board.pieces):
-            if piece.color != color:
-                continue
-
-            from_x, from_y = piece.x, piece.y
-            for tx in range(9):
-                for ty in range(10):
-                    if tx == from_x and ty == from_y:
-                        continue
-                    if not board.is_valid_move(piece, tx, ty):
-                        continue
-
-                    target = board.get_piece_at(tx, ty)
-                    piece.x, piece.y = tx, ty
-                    if target:
-                        board.pieces.remove(target)
-
-                    illegal = board.is_kings_facing() or board.is_under_attack(piece.color)
-
-                    piece.x, piece.y = from_x, from_y
-                    if target:
-                        board.pieces.append(target)
-
-                    if illegal:
-                        continue
-
-                    moves.append(board_to_ucci(from_x, from_y) + board_to_ucci(tx, ty))
-
-        return moves
-
     def choose_ai_move(engine_bestmove):
         # 殘局固定用引擎最佳著，絕不故意失誤
         if game_state == MODE_ENDGAME:
@@ -4465,7 +4389,7 @@ def main():
         if random.random() >= ai_mistake_rate:
             return engine_bestmove
 
-        legal_moves = collect_legal_ucci_moves(ai_color)
+        legal_moves = board.legal_moves_ucci(ai_color) if board else []
         if not legal_moves:
             return engine_bestmove
 
