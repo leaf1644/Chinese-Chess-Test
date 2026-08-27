@@ -14,8 +14,10 @@ from .constants import (
     PIECE_TO_FEN,
     RED,
     UCCI_FILES,
+    opponent_side,
 )
 from .i18n import t
+from .result import GameResult, ResultKind
 
 def create_empty_xiangqi_board(turn=None):
     """空白棋盤（無子），供編輯器使用。"""
@@ -23,9 +25,8 @@ def create_empty_xiangqi_board(turn=None):
     board.pieces = []
     board.turn = RED if turn is None else turn
     board.selected_piece = None
-    board.winner = None
+    board.clear_result()
     board.is_check = False
-    board.draw_reason = ""
     board.warning_msg = ""
     board.moves = []
     board.board_state_history = {}
@@ -59,39 +60,69 @@ def validate_piece_counts(board):
     return True, ""
 
 
-def validate_editor_position(board):
-    """編輯器／自訂開局完整合法性。
+_EDITOR_MSGS = {
+    "facing": lambda: t("editor_kings_facing"),
+    "red_check": lambda: t("editor_red_in_check"),
+    "black_check": lambda: t("editor_black_in_check"),
+    "no_move": lambda: t("editor_no_legal_move"),
+    "opp_no_move": lambda: t("editor_no_legal_move"),
+    "missing_king": lambda: t("editor_need_kings"),
+}
+_ENDGAME_MSGS = {
+    "facing": lambda: "開局將帥照面（非法局面）",
+    "red_check": lambda: "開局紅方已被將軍（殘局不應如此）",
+    "black_check": lambda: "開局黑方已被將軍（殘局不應如此）",
+    "no_move": lambda: "行棋方開局無合法著（已是終局）",
+    "opp_no_move": lambda: "對方開局已無合法著（已是困斃／將死）",
+    "missing_king": lambda: "開局缺少將或帥",
+}
 
-    - 將帥各恰好 1，且在己方九宮合法格
-    - 士／象／兵等皆在可到達格（is_legal_piece_square）
-    - 各兵種數量不超上限（將 1、兵 5、其餘 2）
-    - 不疊子、不照面
-    - **雙方皆不可已被將軍**（避免開局將死／解將邏輯異常）
-    - 行棋方須有合法著（非已終局）
 
-    回傳 (ok, reason)。
+def validate_legal_position(
+    board,
+    *,
+    require_piece_limits=False,
+    require_opponent_has_move=False,
+    messages=None,
+):
+    """開局／局面合法性（落點、照面、被將、合法著）。
+
+    require_piece_limits: 編輯器還檢查各兵種數量上限。
+    require_opponent_has_move: 殘局還要求對方也有合法著。
     """
+    msgs = messages or _ENDGAME_MSGS
     ok_place, reason = validate_endgame_piece_placements(board)
     if not ok_place:
         return False, reason
-
-    ok_cnt, reason_cnt = validate_piece_counts(board)
-    if not ok_cnt:
-        return False, reason_cnt
-
+    if require_piece_limits:
+        ok_cnt, reason_cnt = validate_piece_counts(board)
+        if not ok_cnt:
+            return False, reason_cnt
     if board.is_kings_facing():
-        return False, t("editor_kings_facing")
-
-    # 禁止開局已被將軍（含將死）
+        return False, msgs["facing"]()
     if board.is_under_attack(RED):
-        return False, t("editor_red_in_check")
+        return False, msgs["red_check"]()
     if board.is_under_attack(BLACK):
-        return False, t("editor_black_in_check")
-
+        return False, msgs["black_check"]()
+    if not require_piece_limits:
+        if not board.get_king(RED) or not board.get_king(BLACK):
+            return False, msgs["missing_king"]()
     if not board.has_valid_move(board.turn):
-        return False, t("editor_no_legal_move")
-
+        return False, msgs["no_move"]()
+    if require_opponent_has_move:
+        opp = opponent_side(board.turn)
+        if not board.has_valid_move(opp):
+            return False, msgs["opp_no_move"]()
     return True, ""
+
+
+def validate_editor_position(board):
+    """編輯器／自訂開局完整合法性。回傳 (ok, reason)。"""
+    return validate_legal_position(
+        board,
+        require_piece_limits=True,
+        messages=_EDITOR_MSGS,
+    )
 
 
 def classify_move_quality(cp_loss):
@@ -229,23 +260,11 @@ def validate_endgame_start_position(board):
 
     回傳 (ok, reason)。
     """
-    ok_place, reason_place = validate_endgame_piece_placements(board)
-    if not ok_place:
-        return False, reason_place
-    if board.is_kings_facing():
-        return False, "開局將帥照面（非法局面）"
-    if board.is_under_attack(RED):
-        return False, "開局紅方已被將軍（殘局不應如此）"
-    if board.is_under_attack(BLACK):
-        return False, "開局黑方已被將軍（殘局不應如此）"
-    if not board.get_king(RED) or not board.get_king(BLACK):
-        return False, "開局缺少將或帥"
-    if not board.has_valid_move(board.turn):
-        return False, "行棋方開局無合法著（已是終局）"
-    opp = BLACK if board.turn == RED else RED
-    if not board.has_valid_move(opp):
-        return False, "對方開局已無合法著（已是困斃／將死）"
-    return True, ""
+    return validate_legal_position(
+        board,
+        require_opponent_has_move=True,
+        messages=_ENDGAME_MSGS,
+    )
 
 
 def piece_type_from_name(name):
@@ -306,6 +325,7 @@ class XiangqiBoard:
         self.pieces = []
         self.turn = RED
         self.selected_piece = None
+        self.result = None
         self.winner = None
         self.game_mode = game_mode  # 遊戲模式（PvP / AI / 殘局）
         
@@ -316,8 +336,8 @@ class XiangqiBoard:
         
         self.moves = []  # list[Move]
         
-        # 長將/長捉檢測
-        self.draw_reason = ""  # 和棋原因
+        # 長將/長捉檢測；draw_reason 與 result 同步（相容舊讀取）
+        self.draw_reason = ""
         
         # 重複局面檢測：記錄每步後的棋盤狀態及出現次數
         self.board_state_history = {}  # {狀態字符串: 出現次數}
@@ -332,6 +352,20 @@ class XiangqiBoard:
         # 初始化棋盤狀態計數器
         initial_state = self.get_board_state()
         self.board_state_history[initial_state] = 1
+
+    def set_result(self, kind, winner=None, message=""):
+        """寫入終局結果，並同步 winner／draw_reason。"""
+        self.result = GameResult(kind=kind, winner=winner, message=message or "")
+        self.winner = winner
+        if kind == ResultKind.CHECKMATE:
+            self.draw_reason = ""
+        else:
+            self.draw_reason = message or ""
+
+    def clear_result(self):
+        self.result = None
+        self.winner = None
+        self.draw_reason = ""
 
     def init_board(self):
         layout_red = [
@@ -382,11 +416,10 @@ class XiangqiBoard:
             self.turn = RED
 
         self.selected_piece = None
-        self.winner = None
+        self.clear_result()
         self.is_check = self.is_under_attack(self.turn)
         self.warning_msg = ""
         self.warning_timer = 0
-        self.draw_reason = ""
         self.moves = []
         self.board_state_history = {}
 
@@ -443,15 +476,17 @@ class XiangqiBoard:
             return
         recent = [self.moves[i] for i in indices]
         if all(m.is_check for m in recent):
-            self.draw_reason = t("msg_long_check", n=n)
-            self.winner = next_turn
+            self.set_result(ResultKind.LONG_CHECK, winner=next_turn, message=t("msg_long_check", n=n))
             if self.debug:
                 print(f"[DEBUG] LONG-CHECK by piece id={id(piece)} indices={indices}")
             return
         first_targets = recent[0].chase_targets
         if first_targets and all(m.is_chase and m.chase_targets == first_targets for m in recent):
-            self.draw_reason = t("msg_long_chase", n=self.LONG_CHASE_COUNT)
-            self.winner = next_turn
+            self.set_result(
+                ResultKind.LONG_CHASE,
+                winner=next_turn,
+                message=t("msg_long_chase", n=self.LONG_CHASE_COUNT),
+            )
             if self.debug:
                 print(f"[DEBUG] LONG-CAPTURE by piece id={id(piece)} targets={first_targets}")
 
@@ -461,22 +496,23 @@ class XiangqiBoard:
             self._apply_long_check_or_chase(mover, next_turn)
         if self._enforces_repetition_penalties() and not self.draw_reason:
             if not self.has_crossing_piece(RED) and not self.has_crossing_piece(BLACK):
-                self.draw_reason = t("msg_no_crossing")
-                self.winner = None
+                self.set_result(ResultKind.NO_CROSSING, winner=None, message=t("msg_no_crossing"))
         if self._enforces_repetition_penalties() and not self.draw_reason and self.check_repeated_steps_draw():
-            self.draw_reason = t("msg_repeat_moves")
-            self.winner = None
+            self.set_result(ResultKind.REPEAT_MOVES, winner=None, message=t("msg_repeat_moves"))
 
         repeat_state_key = None
         if not self.draw_reason:
             repeat_count = self.check_repeat_position()
             repeat_state_key = self.get_board_state()
             if self._enforces_repetition_penalties() and repeat_count >= self.REPEAT_POSITION_LIMIT:
-                self.draw_reason = t("msg_repeat_pos", n=self.REPEAT_POSITION_LIMIT)
-                self.winner = None
+                self.set_result(
+                    ResultKind.REPEAT_POSITION,
+                    winner=None,
+                    message=t("msg_repeat_pos", n=self.REPEAT_POSITION_LIMIT),
+                )
 
         if not self.draw_reason and not self.has_valid_move(next_turn):
-            self.winner = mover.color
+            self.set_result(ResultKind.CHECKMATE, winner=mover.color)
         return repeat_state_key
 
     def _displace(self, piece, tx, ty):
@@ -561,9 +597,9 @@ class XiangqiBoard:
             print(f"[DEBUG] capture by {piece.name} id={id(piece)} at ({piece.x},{piece.y}) - is_rootless={is_rootless}")
         
         if captured_piece and captured_piece.name in ('帥', '將'):
-            self.winner = piece.color
+            self.set_result(ResultKind.CHECKMATE, winner=piece.color)
 
-        next_turn = BLACK if self.turn == RED else RED
+        next_turn = opponent_side(self.turn)
         self.turn = next_turn
         is_check = self.is_under_attack(next_turn)
         self.is_check = is_check
@@ -876,7 +912,7 @@ class XiangqiBoard:
 
     def get_rootless_threat_targets(self, attacker):
         """找出 attacker 當前可捉（可吃且無根）的敵方棋子集合。"""
-        enemy_color = BLACK if attacker.color == RED else RED
+        enemy_color = opponent_side(attacker.color)
         targets = []
 
         for target in list(self.pieces):
@@ -898,8 +934,7 @@ class XiangqiBoard:
             self.set_warning(t("msg_no_undo"))
             return False
         
-        self.winner = None
-        self.draw_reason = ""
+        self.clear_result()
         
         move = self.moves.pop()
         move.piece.x = move.old_x
@@ -912,7 +947,7 @@ class XiangqiBoard:
             if self.board_state_history[move.repeat_state_key] <= 0:
                 del self.board_state_history[move.repeat_state_key]
 
-        self.turn = BLACK if self.turn == RED else RED
+        self.turn = opponent_side(self.turn)
         self.is_check = self.is_under_attack(self.turn)
         self.set_warning(t("msg_undone"))
         return True

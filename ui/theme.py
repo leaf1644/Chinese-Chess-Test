@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import pygame
 
-from xiangqi.constants import BLACK, RED
+from xiangqi.constants import BLACK, RED, SIDE_RGB
+
+COLOR_PIECE_RED = SIDE_RGB[RED]
+COLOR_PIECE_BLACK = SIDE_RGB[BLACK]
 
 WHITE = (255, 255, 255)
 GOLD = (160, 118, 48)

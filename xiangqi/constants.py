@@ -1,9 +1,39 @@
 """棋規／對局常數。不依賴 pygame。"""
 from __future__ import annotations
 
-# 棋子身分（同時也是繪製色）
-RED = (168, 36, 32)
-BLACK = (22, 20, 18)
+# 棋手／棋子身分（不是 RGB）。繪製色見 SIDE_RGB／side_rgb()。
+RED = "red"
+BLACK = "black"
+
+SIDE_RGB = {
+    RED: (168, 36, 32),
+    BLACK: (22, 20, 18),
+}
+
+
+def side_rgb(side):
+    """身分 → 繪製用 RGB。誤傳舊版 RGB tuple 時仍可對回表。"""
+    if side in SIDE_RGB:
+        return SIDE_RGB[side]
+    for ident, rgb in SIDE_RGB.items():
+        if side == rgb:
+            return rgb
+    return SIDE_RGB[RED]
+
+
+def parse_side(token, default=RED):
+    """存檔／FEN／字串 → 身分。"""
+    if token in (RED, BLACK):
+        return token
+    if token in ("r", "R", "w"):
+        return RED
+    if token in ("b", "B"):
+        return BLACK
+    return default
+
+
+def opponent_side(side):
+    return BLACK if side == RED else RED
 
 # 對局／畫面模式（存檔仍寫入整數；畫面改由 Screen 物件切換）
 MODE_MENU = 0

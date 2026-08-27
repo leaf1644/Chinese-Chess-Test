@@ -17,6 +17,7 @@ from xiangqi.constants import (
     MODE_MENU,
     MODE_PVP,
     RED,
+    side_rgb,
 )
 from xiangqi.i18n import (
     ai_difficulty_display,
@@ -103,25 +104,25 @@ class EditorScreen(Screen):
                     if action == "back":
                         app.goto(MODE_MENU)
                         app.board = None
-                        app.editor_message = ""
+                        app.set_editor_message("")
                         app.editor_board_pick = None
                     elif action == "turn" and app.board:
                         app.board.turn = BLACK if app.board.turn == RED else RED
                         app.build_editor_buttons()
-                        app.editor_message = ""
+                        app.set_editor_message("")
                     elif action == "erase":
                         app.editor_selected = "erase"
                         app.editor_board_pick = None
-                        app.editor_message = ""
+                        app.set_editor_message("")
                     elif action == "clear" and app.board:
                         app.board = create_empty_xiangqi_board(app.board.turn)
                         app.editor_board_pick = None
-                        app.editor_message = ""
+                        app.set_editor_message("")
                         app.build_editor_buttons()
                     elif action == "initial":
                         app.board = XiangqiBoard(MODE_PVP)
                         app.editor_board_pick = None
-                        app.editor_message = ""
+                        app.set_editor_message("")
                         app.build_editor_buttons()
                     elif action == "save":
                         app.editor_save_current()
@@ -136,7 +137,7 @@ class EditorScreen(Screen):
                 if rect.collidepoint(mx, my) and event.button == 1:
                     app.editor_selected = item
                     app.editor_board_pick = None
-                    app.editor_message = ""
+                    app.set_editor_message("")
                     handled = True
                     break
             if handled:
@@ -197,7 +198,7 @@ class EditorScreen(Screen):
             pygame.draw.rect(screen, border_c, rect, 2 if app.editor_selected != item else 3, border_radius=8)
             if isinstance(item, tuple):
                 name, color = item
-                ts = app.font_small.render(name, True, color)
+                ts = app.font_small.render(name, True, side_rgb(color))
                 screen.blit(ts, ts.get_rect(center=rect.center))
 
         # 右側按鈕
@@ -229,9 +230,7 @@ class EditorScreen(Screen):
                 lines.append(s[:chars_per_line])
                 s = s[chars_per_line:]
             for li, line in enumerate(lines[:6]):
-                col = WARNING_COLOR if any(
-                    k in app.editor_message for k in ("非法", "不能", "最多", "不合法", "失敗", "空白")
-                ) else COLOR_TEXT
+                col = WARNING_COLOR if app.editor_message_kind == "error" else COLOR_TEXT
                 screen.blit(app.font_small.render(line, True, col), (panel_x, msg_y + li * 24))
 
         side_hint = app.font_small.render(t("editor_side_hint"), True, COLOR_TEXT_SECONDARY)
@@ -268,7 +267,7 @@ class EditorLibraryScreen(Screen):
                     for btn, pos in app.editor_lib_buttons:
                         if btn.is_clicked(mouse_pos):
                             app.editor_lib_selected = pos.get("id")
-                            app.editor_message = ""
+                            app.set_editor_message("")
                             break
 
     def draw(self, surface, mouse_pos):
@@ -316,7 +315,7 @@ class EditorLibraryScreen(Screen):
 
         if app.editor_message:
             # 底部訊息，簡短顯示
-            mcol = WARNING_COLOR if "請" in app.editor_message or "失敗" in app.editor_message else SUCCESS_COLOR
+            mcol = WARNING_COLOR if app.editor_message_kind == "error" else SUCCESS_COLOR
             ms = app.font_small.render(app.editor_message, True, mcol)
             screen.blit(ms, ms.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT - 100)))
 

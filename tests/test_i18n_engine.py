@@ -34,6 +34,7 @@ class TestNoPygameOnImport(unittest.TestCase):
             "import xiangqi.board\n"
             "import xiangqi.endgame\n"
             "import xiangqi.persist\n"
+            "import xiangqi.result\n"
             "assert 'pygame' not in sys.modules, 'pygame was imported'\n"
         )
         proc = subprocess.run(

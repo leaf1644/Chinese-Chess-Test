@@ -118,6 +118,26 @@ class TestGameAppGoto(unittest.TestCase):
         self.assertEqual(self.app.game_state, MODE_PVP)
         self.assertEqual(self.app.screen.mode_id, MODE_PVP)
 
+    def test_editor_message_kind(self):
+        self.app.set_editor_message("儲存失敗：disk", kind="error")
+        self.assertEqual(self.app.editor_message_kind, "error")
+        self.app.set_editor_message("局面已儲存：測試", kind="info")
+        self.assertEqual(self.app.editor_message_kind, "info")
+        self.app.set_editor_message("")
+        self.assertEqual(self.app.editor_message_kind, "info")
+
+
+class TestButtonFields(unittest.TestCase):
+    def test_ghost_is_constructor_field(self):
+        from ui.widgets import Button
+        btn = Button(0, 0, 40, 20, "x", ghost=True)
+        self.assertTrue(btn.ghost)
+        self.assertTrue(hasattr(btn, "text_color"))
+        self.assertTrue(hasattr(btn, "border_color"))
+        self.assertTrue(hasattr(btn, "draw_shadow"))
+        normal = Button(0, 0, 40, 20, "y")
+        self.assertFalse(normal.ghost)
+
 
 if __name__ == "__main__":
     unittest.main()

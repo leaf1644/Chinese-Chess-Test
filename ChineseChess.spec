@@ -15,6 +15,7 @@ a = Analysis(
     hiddenimports=[
         'xiangqi', 'xiangqi.i18n', 'xiangqi.engine', 'xiangqi.paths',
         'xiangqi.board', 'xiangqi.constants', 'xiangqi.endgame', 'xiangqi.persist',
+        'xiangqi.result',
         'ui', 'ui.app', 'ui.theme', 'ui.widgets', 'ui.assets', 'ui.draw', 'ui.text',
         'ui.dialogs', 'ui.screens', 'ui.screens.base', 'ui.screens.menu',
         'ui.screens.play', 'ui.screens.endgame_select', 'ui.screens.editor',

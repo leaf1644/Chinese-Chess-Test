@@ -360,6 +360,59 @@ class TestEditorValidation(unittest.TestCase):
         self.assertTrue(ok, reason)
 
 
+class TestSideIdentity(unittest.TestCase):
+    def test_red_black_are_idents_not_rgb(self):
+        self.assertEqual(app.RED, "red")
+        self.assertEqual(app.BLACK, "black")
+        self.assertIsInstance(app.side_rgb(app.RED), tuple)
+        self.assertEqual(app.side_rgb(app.RED), (168, 36, 32))
+        self.assertEqual(app.side_rgb(app.BLACK), (22, 20, 18))
+
+    def test_piece_color_is_identity(self):
+        board = app.XiangqiBoard()
+        king = board.get_king(app.RED)
+        self.assertEqual(king.color, app.RED)
+        self.assertEqual(king.color, "red")
+
+
+class TestValidateLegalPosition(unittest.TestCase):
+    def test_shared_helper_matches_wrappers(self):
+        fen = "3k5/9/9/9/9/9/9/9/9/5K3 w - - 0 1"
+        board = app.XiangqiBoard(fen=fen)
+        ok_shared, _ = app.validate_legal_position(board, require_piece_limits=True)
+        ok_editor, _ = app.validate_editor_position(board)
+        self.assertEqual(ok_shared, ok_editor)
+        self.assertTrue(ok_editor)
+
+    def test_endgame_wrapper_uses_shared(self):
+        fen = "4k4/9/4N4/9/9/9/9/9/9/3C1K3 w - - 0 1"
+        board = app.XiangqiBoard(fen=fen)
+        ok_a, ra = app.validate_endgame_start_position(board)
+        ok_b, rb = app.validate_legal_position(board, require_opponent_has_move=True)
+        self.assertEqual(ok_a, ok_b)
+        self.assertEqual(ra, rb)
+
+
+class TestGameResult(unittest.TestCase):
+    def test_checkmate_sets_typed_result(self):
+        fen = "4k4/9/4N4/9/9/9/9/9/9/3C1K3 w - - 0 1"
+        board = app.XiangqiBoard(game_mode=app.MODE_PVP, fen=fen)
+        cannon = board.get_piece_at(3, 9)
+        self.assertTrue(board.move_piece(cannon, 4, 9))
+        self.assertIsNotNone(board.result)
+        self.assertEqual(board.result.kind, app.ResultKind.CHECKMATE)
+        self.assertEqual(board.result.winner, app.RED)
+        self.assertEqual(board.winner, app.RED)
+        self.assertEqual(board.draw_reason, "")
+
+    def test_timeout_kind_keeps_winner_and_message(self):
+        board = app.XiangqiBoard(game_mode=app.MODE_PVP)
+        board.set_result(app.ResultKind.TIMEOUT, winner=app.BLACK, message="紅方超時，黑方獲勝")
+        self.assertEqual(board.result.kind, app.ResultKind.TIMEOUT)
+        self.assertEqual(board.winner, app.BLACK)
+        self.assertEqual(board.draw_reason, "紅方超時，黑方獲勝")
+
+
 class TestSavePayload(unittest.TestCase):
     def test_corrupt_save_does_not_crash_load_helpers(self):
         # 僅驗證 json 錯誤可被捕獲的模式（load_game 在 main 內，此處測 progress）

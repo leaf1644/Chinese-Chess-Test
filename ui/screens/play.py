@@ -17,6 +17,7 @@ from xiangqi.constants import (
     MODE_PVP,
     RED,
 )
+from xiangqi.result import ResultKind
 from xiangqi.i18n import (
     ai_difficulty_display,
     diff_group_label,
@@ -43,6 +44,7 @@ from ui.theme import (
     COLOR_CARD_BORDER,
     COLOR_LINE,
     COLOR_PRIMARY,
+    COLOR_PIECE_RED,
     COLOR_TEXT,
     COLOR_TEXT_ON_DARK,
     COLOR_TEXT_SECONDARY,
@@ -137,7 +139,9 @@ class PlayScreen(Screen):
                 if app.draw_offer_popup:
                     if event.button == 1:
                         if app.btn_draw_accept and app.btn_draw_accept.is_clicked(mouse_pos):
-                            app.board.draw_reason = t("msg_draw_agree")
+                            app.board.set_result(
+                                ResultKind.AGREE_DRAW, winner=None, message=t("msg_draw_agree")
+                            )
                             app.close_draw_offer_popup()
                         elif app.btn_draw_reject and app.btn_draw_reject.is_clicked(mouse_pos):
                             app.board.set_warning(t("msg_draw_rejected"))
@@ -357,7 +361,7 @@ class PlayScreen(Screen):
         pygame.draw.line(screen, blend_rgb(COLOR_UI_BAR, GOLD, 0.25), (0, TOP_UI_HEIGHT - 1), (SCREEN_WIDTH, TOP_UI_HEIGHT - 1), 1)
 
         turn_str = t("red_turn") if app.board.turn == RED else t("black_turn")
-        color = RED if app.board.turn == RED else COLOR_TEXT_ON_DARK
+        color = COLOR_PIECE_RED if app.board.turn == RED else COLOR_TEXT_ON_DARK
         screen.blit(app.font_ui.render(turn_str, True, color), (20, 12))
 
         if app.game_state == MODE_PVP:
@@ -543,7 +547,7 @@ class PlayScreen(Screen):
                     )
                     pygame.draw.rect(screen, (236, 228, 210), hl, border_radius=6)
 
-                move_color = RED if i % 2 == 0 else COLOR_TEXT
+                move_color = COLOR_PIECE_RED if i % 2 == 0 else COLOR_TEXT
                 tag = ""
                 tag_color = move_color
                 if i < len(app.analysis_results) and app.analysis_results[i]:

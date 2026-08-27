@@ -15,6 +15,7 @@ from xiangqi.board import (
     apply_ucci_move,
     classify_move_quality,
     create_empty_xiangqi_board,
+    is_legal_piece_square,
     score_to_cp,
     ucci_pv_to_chinese,
     validate_editor_position,
@@ -42,10 +43,13 @@ from xiangqi.constants import (
     MODE_ENDGAME_LEVELS,
     MODE_MENU,
     MODE_PVP,
+    PIECE_MAX_COUNT,
     RED,
     SAVE_FILE_NAME,
     TIME_CONTROL_PRESETS,
+    parse_side,
 )
+from xiangqi.result import ResultKind
 from xiangqi.engine import (
     DEFAULT_EVAL_MOVETIME_MS as AI_EVAL_MOVETIME_MS,
     EngineDispatcher,
@@ -241,7 +245,8 @@ class GameApp:
         # --- 局面編輯器 ---
         self.editor_selected = None  # (name, color) | "erase"  # 調色盤選取
         self.editor_board_pick = None  # 盤上選取待移動的 Piece 實例
-        self.editor_message = ""  # 僅顯示錯誤／重要操作結果
+        self.set_editor_message("")  # 僅顯示錯誤／重要操作結果
+        self.editor_message_kind = "info"  # "error" | "info"
         self.editor_saved_list = []
         self.editor_lib_selected = None  # 局面庫選中 id
         self.editor_lib_scroll = 0
@@ -359,8 +364,14 @@ class GameApp:
         self.btn_difficulty = None
         self.btn_menu_load = Button(0, 0, 100, 40, t("load_save"))
         self.btn_clock = Button(0, 0, 100, 40, t("clock", label=time_control_label(self.current_time_control())))
-        self.btn_quit = Button(0, 0, 100, 40, t("quit"))
-        self.btn_quit.ghost = True
+        self.btn_quit = Button(
+            0, 0, 100, 40, t("quit"),
+            ghost=True,
+            draw_shadow=False,
+            radius=8,
+            border_color=COLOR_CARD_BORDER,
+            text_color=COLOR_TEXT_SECONDARY,
+        )
         self.btn_lang = Button(0, 0, 100, 40, t("lang_chip"))
         self.layout_menu_buttons()
 
@@ -571,8 +582,7 @@ class GameApp:
                 return False
             new_snapshots.append({"pieces": [(p.name, p.color, p.x, p.y) for p in rebuilt.pieces], "turn": rebuilt.turn})
 
-        rebuilt.winner = None
-        rebuilt.draw_reason = ""
+        rebuilt.clear_result()
         rebuilt.warning_msg = ""
         rebuilt.warning_timer = 0
         self.board = rebuilt
@@ -643,16 +653,18 @@ class GameApp:
             self.clock_red_ms -= dt_ms
             if self.clock_red_ms <= 0:
                 self.clock_red_ms = 0
-                self.board.winner = BLACK
-                self.board.draw_reason = t("timeout_red")
+                self.board.set_result(
+                    ResultKind.TIMEOUT, winner=BLACK, message=t("timeout_red")
+                )
                 self.board.set_warning(t("timeout_red"))
                 self.capture_finished_record_if_needed()
         else:
             self.clock_black_ms -= dt_ms
             if self.clock_black_ms <= 0:
                 self.clock_black_ms = 0
-                self.board.winner = RED
-                self.board.draw_reason = t("timeout_black")
+                self.board.set_result(
+                    ResultKind.TIMEOUT, winner=RED, message=t("timeout_black")
+                )
                 self.board.set_warning(t("timeout_black"))
                 self.capture_finished_record_if_needed()
 
@@ -890,15 +902,16 @@ class GameApp:
 
 
     def color_to_str(self, color):
-        return "red" if color == RED else "black"
-
+        return parse_side(color, RED)
 
     def str_to_color(self, token, default):
-        if token == "red":
-            return RED
-        if token == "black":
-            return BLACK
+        if token in ("red", "black", RED, BLACK):
+            return parse_side(token, default)
         return default
+
+    def set_editor_message(self, text, kind="info"):
+        self.editor_message = text or ""
+        self.editor_message_kind = kind if text else "info"
 
 
     def layout_bottom_bar(self, button_specs, y=None, height=None, gap=None, margin_x=None):
@@ -1300,7 +1313,7 @@ class GameApp:
         self.board.pieces.append(Piece("將", BLACK, 4, 0))
         self.editor_selected = ("兵", RED)
         self.editor_board_pick = None
-        self.editor_message = ""  # 正常操作不刷訊息
+        self.set_editor_message("")  # 正常操作不刷訊息
         self.editor_saved_list = load_custom_positions()
         self.goto(MODE_EDITOR)
         self.build_editor_buttons()
@@ -1332,7 +1345,7 @@ class GameApp:
         self.editor_saved_list = load_custom_positions()
         self.editor_lib_selected = None
         self.editor_lib_scroll = 0
-        self.editor_message = ""
+        self.set_editor_message("")
         self.goto(MODE_EDITOR_LIB)
         self.build_editor_lib_ui()
 
@@ -1404,7 +1417,7 @@ class GameApp:
             return
         ok_sq, reason_sq = is_legal_piece_square(name, color, gx, gy)
         if not ok_sq:
-            self.editor_message = t("editor_bad_square", name=name)
+            self.set_editor_message(t("editor_bad_square", name=name), kind="error")
             return
 
         temp = []
@@ -1418,16 +1431,15 @@ class GameApp:
         limit = PIECE_MAX_COUNT.get(name, 0)
         if same_count + 1 > limit:
             side = "紅" if color == RED else "黑"
-            self.editor_message = t("editor_too_many", side=side, name=name, limit=limit)
+            self.set_editor_message(t("editor_too_many", side=side, name=name, limit=limit), kind="error")
             return
 
         self.board.pieces = temp
         self.board.pieces.append(Piece(name, color, gx, gy))
         self.board.selected_piece = None
-        self.board.winner = None
-        self.board.draw_reason = ""
+        self.board.clear_result()
         self.editor_board_pick = None
-        self.editor_message = ""
+        self.set_editor_message("")
 
 
     def editor_erase_at(self, gx, gy):
@@ -1438,7 +1450,7 @@ class GameApp:
             self.editor_board_pick = None
         self.board.pieces = [p for p in self.board.pieces if not (p.x == gx and p.y == gy)]
         self.board.selected_piece = None
-        self.editor_message = ""
+        self.set_editor_message("")
 
 
     def editor_pick_board_piece(self, piece):
@@ -1447,7 +1459,7 @@ class GameApp:
             return
         self.editor_board_pick = piece
         self.editor_selected = None  # 退出調色盤放置／橡皮擦模式
-        self.editor_message = t("editor_pick_hint")
+        self.set_editor_message(t("editor_pick_hint"), kind="info")
 
 
     def editor_move_picked_to(self, gx, gy):
@@ -1463,16 +1475,16 @@ class GameApp:
         # 棋子可能已被清空；確認仍在盤上
         if piece not in self.board.pieces:
             self.editor_board_pick = None
-            self.editor_message = ""
+            self.set_editor_message("")
             return
         if piece.x == gx and piece.y == gy:
             self.editor_board_pick = None
-            self.editor_message = ""
+            self.set_editor_message("")
             return
 
         ok_sq, _reason = is_legal_piece_square(piece.name, piece.color, gx, gy)
         if not ok_sq:
-            self.editor_message = t("editor_bad_square", name=piece.name)
+            self.set_editor_message(t("editor_bad_square", name=piece.name), kind="error")
             return
 
         target = self.board.get_piece_at(gx, gy)
@@ -1486,11 +1498,10 @@ class GameApp:
         piece.y = gy
         piece.selected = False
         self.board.selected_piece = None
-        self.board.winner = None
-        self.board.draw_reason = ""
+        self.board.clear_result()
         self.editor_board_pick = None
         # 移動成功不常駐訊息，避免干擾
-        self.editor_message = ""
+        self.set_editor_message("")
 
 
     def editor_save_current(self):
@@ -1498,7 +1509,7 @@ class GameApp:
             return
         ok, reason = validate_editor_position(self.board)
         if not ok:
-            self.editor_message = t("editor_invalid", reason=reason)
+            self.set_editor_message(t("editor_invalid", reason=reason), kind="error")
             return
         fen = self.board.to_fen()
         positions = load_custom_positions()
@@ -1511,37 +1522,37 @@ class GameApp:
         if title is None:
             return  # 使用者取消
         if not title.strip():
-            self.editor_message = t("editor_name_empty")
+            self.set_editor_message(t("editor_name_empty"), kind="error")
             return
         new_id = f"pos_{int(time.time())}"
         positions.append({"id": new_id, "title": title.strip(), "fen": fen})
         ok_w, err = save_custom_positions(positions)
         if ok_w:
             self.editor_saved_list = positions
-            self.editor_message = t("editor_saved", title=title.strip())
+            self.set_editor_message(t("editor_saved", title=title.strip()), kind="info")
         else:
-            self.editor_message = t("editor_save_fail", err=err)
+            self.set_editor_message(t("editor_save_fail", err=err), kind="error")
 
 
     def editor_lib_load_to_edit(self):
         item = self.editor_lib_get_selected()
         if not item:
-            self.editor_message = t("editor_select_first")
+            self.set_editor_message(t("editor_select_first"), kind="error")
             return
         try:
             self.board = XiangqiBoard(MODE_PVP, fen=item["fen"])
             self.editor_board_pick = None
-            self.editor_message = t("editor_loaded", title=item["title"])
+            self.set_editor_message(t("editor_loaded", title=item["title"]), kind="info")
             self.goto(MODE_EDITOR)
             self.build_editor_buttons()
         except Exception as ex:
-            self.editor_message = t("editor_load_fail", err=str(ex))
+            self.set_editor_message(t("editor_load_fail", err=str(ex)), kind="error")
 
 
     def editor_lib_start_game(self, mode):
         item = self.editor_lib_get_selected()
         if not item:
-            self.editor_message = t("editor_select_first")
+            self.set_editor_message(t("editor_select_first"), kind="error")
             return
         # 像讀取存檔一樣進入對局；人機可繼續用 AI
         warning = (
@@ -1555,7 +1566,7 @@ class GameApp:
     def editor_lib_rename(self):
         item = self.editor_lib_get_selected()
         if not item:
-            self.editor_message = t("editor_select_first")
+            self.set_editor_message(t("editor_select_first"), kind="error")
             return
         new_name = prompt_text_input(
             t("editor_rename_title"),
@@ -1565,7 +1576,7 @@ class GameApp:
         if new_name is None:
             return
         if not new_name.strip():
-            self.editor_message = t("editor_name_empty")
+            self.set_editor_message(t("editor_name_empty"), kind="error")
             return
         positions = load_custom_positions()
         for p in positions:
@@ -1575,26 +1586,26 @@ class GameApp:
         ok, err = save_custom_positions(positions)
         if ok:
             self.editor_saved_list = positions
-            self.editor_message = t("editor_renamed")
+            self.set_editor_message(t("editor_renamed"), kind="info")
             self.build_editor_lib_ui()
         else:
-            self.editor_message = t("editor_save_fail", err=err)
+            self.set_editor_message(t("editor_save_fail", err=err), kind="error")
 
 
     def editor_lib_delete(self):
         item = self.editor_lib_get_selected()
         if not item:
-            self.editor_message = t("editor_select_first")
+            self.set_editor_message(t("editor_select_first"), kind="error")
             return
         positions = [p for p in load_custom_positions() if p.get("id") != item["id"]]
         ok, err = save_custom_positions(positions)
         if ok:
             self.editor_saved_list = positions
             self.editor_lib_selected = None
-            self.editor_message = t("editor_deleted")
+            self.set_editor_message(t("editor_deleted"), kind="info")
             self.build_editor_lib_ui()
         else:
-            self.editor_message = t("editor_save_fail", err=err)
+            self.set_editor_message(t("editor_save_fail", err=err), kind="error")
 
 
     def save_game_to_disk(self):
@@ -1753,7 +1764,9 @@ class GameApp:
                 self.board.set_warning(t("msg_draw_not_your_turn"))
                 return
             if abs(self.eval_red_score_cp) <= 100:
-                self.board.draw_reason = t("msg_draw_agree_ai")
+                self.board.set_result(
+                    ResultKind.AGREE_DRAW, winner=None, message=t("msg_draw_agree_ai")
+                )
                 self.board.set_warning(t("msg_draw_ai_accept"))
             else:
                 self.board.set_warning(t("msg_draw_ai_reject"))

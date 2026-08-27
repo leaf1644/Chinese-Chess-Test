@@ -19,6 +19,7 @@ from xiangqi.board import (  # noqa: F401
     validate_editor_position,
     validate_endgame_piece_placements,
     validate_endgame_start_position,
+    validate_legal_position,
     validate_piece_counts,
 )
 from xiangqi.constants import (  # noqa: F401
@@ -52,9 +53,13 @@ from xiangqi.constants import (  # noqa: F401
     PIECE_TO_FEN,
     RED,
     SAVE_FILE_NAME,
+    SIDE_RGB,
+    parse_side,
+    side_rgb,
     TIME_CONTROL_PRESETS,
     UCCI_FILES,
 )
+from xiangqi.result import GameResult, ResultKind  # noqa: F401
 from xiangqi.endgame import (  # noqa: F401
     is_endgame_unlocked,
     load_endgame_progress,
