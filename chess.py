@@ -3629,11 +3629,6 @@ def main():
         rebuild_endgame_list_scrollbar()
         build_endgame_level_buttons()
 
-    def open_endgame_select(section=None):
-        """對外入口：從主選單或對局「關卡列表」回來時，回到難度選擇。"""
-        # 若未指定 section，維持目前區塊（例如對局中按「關卡列表」）
-        open_endgame_diff_select(section)
-
     def mark_endgame_cleared(level_id):
         nonlocal endgame_progress, endgame_cleared
         if level_id not in endgame_cleared:
@@ -3684,123 +3679,23 @@ def main():
             endgame_status = "failed"
             board.set_warning(t("msg_endgame_fail_limit", n=max_moves))
 
-    def start_endgame_level(level):
-        nonlocal game_state, board, history_scroll
-        nonlocal ai_enabled, eval_enabled, suggest_enabled
-        nonlocal player_color, ai_color, view_color
-        nonlocal endgame_current, endgame_player_moves, endgame_status
-        nonlocal draw_offer_popup, btn_draw_accept, btn_draw_reject
-        nonlocal replay_snapshots, replay_index, replay_mode_active
-        nonlocal replay_record_moves, replay_record_notation
-        nonlocal replay_finished_winner, replay_finished_draw_reason
-        nonlocal clock_enabled, clock_last_tick
-        nonlocal game_start_fen
+    def start_session(
+        mode,
+        fen=None,
+        human_side=RED,
+        *,
+        clocks=None,
+        validate=None,
+        warning=None,
+        view=None,
+        opponent=None,
+        endgame_level=None,
+    ):
+        """開一局：標準開局、自訂 FEN、殘局、或讀檔前的起始局面。成功回傳 True。
 
-        stop_engine()
-        reset_ai_state()
-        reset_eval_state(reset_display=True)
-        reset_suggest_state(reset_display=True)
-
-        try:
-            board = XiangqiBoard(MODE_ENDGAME, fen=level["fen"])
-        except Exception as ex:
-            game_state = MODE_ENDGAME_LEVELS
-            rebuild_endgame_list_scrollbar()
-            build_endgame_level_buttons()
-            # 暫存警告到下一次有 board 時較難顯示；直接 print 並用選關狀態
-            print(f"[endgame] 載入失敗 {level.get('id')}: {ex}")
-            return
-
-        ok_pos, reason = validate_endgame_start_position(board)
-        if not ok_pos:
-            print(f"[endgame] 非法開局 {level.get('id')}: {reason}")
-            board = None
-            game_state = MODE_ENDGAME_LEVELS
-            rebuild_endgame_list_scrollbar()
-            build_endgame_level_buttons()
-            return
-
-        endgame_current = level
-        endgame_player_moves = 0
-        endgame_status = ""
-        game_state = MODE_ENDGAME
-        eval_enabled = True
-        suggest_enabled = False
-        ai_enabled = True
-        game_start_fen = board.to_fen()
-
-        human = RED if level.get("player_side") != "black" else BLACK
-        player_color = human
-        ai_color = BLACK if human == RED else RED
-        view_color = human
-
-        history_scroll = make_history_scrollbar()
-        setup_in_game_buttons(for_endgame=True)
-        reset_replay_history()
-        replay_record_moves = []
-        replay_record_notation = []
-        replay_finished_winner = None
-        replay_finished_draw_reason = ""
-        replay_index = None
-        replay_mode_active = False
-        draw_offer_popup = None
-        btn_draw_accept = None
-        btn_draw_reject = None
-        # 殘局不用棋鐘
-        clock_enabled = False
-        clock_last_tick = None
-        reset_analysis_state()
-        board.set_warning(t("msg_endgame_start", title=level["title"]))
-
-    def start_new_game(mode, human_side=RED):
-        nonlocal game_state, board, history_scroll
-        nonlocal ai_enabled, eval_enabled, suggest_enabled
-        nonlocal player_color, ai_color, view_color
-        nonlocal draw_offer_popup, btn_draw_accept, btn_draw_reject
-        nonlocal replay_snapshots, replay_index, replay_mode_active
-        nonlocal replay_record_moves, replay_record_notation
-        nonlocal replay_finished_winner, replay_finished_draw_reason
-        nonlocal game_start_fen
-
-        stop_engine()
-        reset_ai_state()
-        reset_eval_state(reset_display=True)
-        reset_suggest_state(reset_display=True)
-        reset_analysis_state()
-
-        board = XiangqiBoard(mode)
-        game_start_fen = board.to_fen()
-        game_state = mode
-        eval_enabled = True
-        suggest_enabled = False
-
-        if mode == MODE_AI:
-            ai_enabled = True
-            player_color = human_side
-            ai_color = BLACK if human_side == RED else RED
-            view_color = human_side
-        else:
-            ai_enabled = False
-            player_color = RED
-            ai_color = BLACK
-            view_color = RED
-
-        history_scroll = make_history_scrollbar()
-        setup_in_game_buttons()
-        reset_replay_history()
-        replay_record_moves = []
-        replay_record_notation = []
-        replay_finished_winner = None
-        replay_finished_draw_reason = ""
-        replay_index = None
-        replay_mode_active = False
-        draw_offer_popup = None
-        btn_draw_accept = None
-        btn_draw_reject = None
-        init_clocks_for_game()
-
-    def start_game_from_fen(mode, fen, human_side=RED):
-        """由編輯器／局面庫 FEN 開局（雙人／人機）。AI 難度與主選單相同。"""
+        validate: None（不額外審核）、"editor"、"endgame"
+        clocks: None 時殘局關閉棋鐘、其餘開啟
+        """
         nonlocal game_state, board, history_scroll
         nonlocal ai_enabled, eval_enabled, suggest_enabled
         nonlocal player_color, ai_color, view_color
@@ -3812,47 +3707,81 @@ def main():
         nonlocal clock_enabled, clock_last_tick
         nonlocal game_start_fen
 
+        for_endgame = mode == MODE_ENDGAME or endgame_level is not None
+        if clocks is None:
+            clocks = not for_endgame
+
         stop_engine()
         reset_ai_state()
         reset_eval_state(reset_display=True)
         reset_suggest_state(reset_display=True)
         reset_analysis_state()
 
+        def _fail_endgame_load(msg):
+            nonlocal game_state, board
+            print(msg)
+            board = None
+            game_state = MODE_ENDGAME_LEVELS
+            rebuild_endgame_list_scrollbar()
+            build_endgame_level_buttons()
+
         try:
-            board = XiangqiBoard(mode, fen=fen)
+            new_board = XiangqiBoard(mode, fen=fen)
         except Exception as ex:
+            if for_endgame:
+                level_id = (endgame_level or {}).get("id")
+                _fail_endgame_load(f"[endgame] 載入失敗 {level_id}: {ex}")
+                return False
             if board:
                 board.set_warning(t("msg_fen_fail", err=ex))
             return False
 
-        ok, reason = validate_editor_position(board)
-        if not ok:
-            board.set_warning(t("editor_invalid", reason=reason))
-            return False
+        if validate == "editor":
+            ok, reason = validate_editor_position(new_board)
+            if not ok:
+                board = new_board
+                board.set_warning(t("editor_invalid", reason=reason))
+                return False
+        elif validate == "endgame" or for_endgame:
+            ok, reason = validate_endgame_start_position(new_board)
+            if not ok:
+                level_id = (endgame_level or {}).get("id")
+                _fail_endgame_load(f"[endgame] 非法開局 {level_id}: {reason}")
+                return False
 
+        board = new_board
         game_start_fen = board.to_fen()
         game_state = mode
         eval_enabled = True
         suggest_enabled = False
-        endgame_current = None
-        endgame_status = ""
-        endgame_player_moves = 0
 
-        if mode == MODE_AI:
-            ai_enabled = True
-            player_color = human_side
-            ai_color = BLACK if human_side == RED else RED
-            view_color = human_side
-            # 與主選單 AI 難度一致（不另外改為固定難度）
-            apply_ai_difficulty(ai_difficulty)
-        else:
+        if mode == MODE_PVP:
             ai_enabled = False
             player_color = RED
             ai_color = BLACK
-            view_color = RED
+            view_color = RED if view is None else view
+        else:
+            ai_enabled = True
+            player_color = human_side
+            if opponent is not None and opponent != human_side:
+                ai_color = opponent
+            else:
+                ai_color = BLACK if human_side == RED else RED
+            view_color = human_side if view is None else view
+            if mode == MODE_AI:
+                apply_ai_difficulty(ai_difficulty)
+
+        if for_endgame and endgame_level is not None:
+            endgame_current = endgame_level
+            endgame_player_moves = 0
+            endgame_status = ""
+        elif not for_endgame:
+            endgame_current = None
+            endgame_status = ""
+            endgame_player_moves = 0
 
         history_scroll = make_history_scrollbar()
-        setup_in_game_buttons()
+        setup_in_game_buttons(for_endgame=for_endgame)
         reset_replay_history()
         replay_record_moves = []
         replay_record_notation = []
@@ -3863,14 +3792,28 @@ def main():
         draw_offer_popup = None
         btn_draw_accept = None
         btn_draw_reject = None
-        init_clocks_for_game()
-        if mode == MODE_AI:
-            board.set_warning(
-                t("editor_start_ai", level=ai_difficulty_display(ai_difficulty))
-            )
+
+        if clocks:
+            init_clocks_for_game()
         else:
-            board.set_warning(t("editor_start_pvp"))
+            clock_enabled = False
+            clock_last_tick = None
+
+        if warning:
+            board.set_warning(warning)
         return True
+
+    def start_endgame_level(level):
+        human = RED if level.get("player_side") != "black" else BLACK
+        return start_session(
+            MODE_ENDGAME,
+            fen=level["fen"],
+            human_side=human,
+            clocks=False,
+            validate="endgame",
+            warning=t("msg_endgame_start", title=level["title"]),
+            endgame_level=level,
+        )
 
     def open_editor():
         """進入局面編輯器。"""
@@ -4131,7 +4074,12 @@ def main():
             editor_message = t("editor_select_first")
             return
         # 像讀取存檔一樣進入對局；人機可繼續用 AI
-        start_game_from_fen(mode, item["fen"], RED)
+        warning = (
+            t("editor_start_ai", level=ai_difficulty_display(ai_difficulty))
+            if mode == MODE_AI
+            else t("editor_start_pvp")
+        )
+        start_session(mode, fen=item["fen"], human_side=RED, validate="editor", warning=warning)
 
     def editor_lib_rename():
         nonlocal editor_saved_list, editor_message
@@ -4259,54 +4207,19 @@ def main():
             if saved_start_fen is not None and not isinstance(saved_start_fen, str):
                 raise ValueError("存檔 start_fen 格式錯誤")
 
+            opponent = None
             if saved_mode == MODE_AI:
-                if saved_start_fen:
-                    # 自訂起始局面的存檔：不可用標準開局再重播
-                    stop_engine()
-                    reset_ai_state()
-                    reset_eval_state(reset_display=True)
-                    reset_suggest_state(reset_display=True)
-                    reset_analysis_state()
-                    board = XiangqiBoard(MODE_AI, fen=saved_start_fen)
-                    game_start_fen = board.to_fen()
-                    game_state = MODE_AI
-                    eval_enabled = True
-                    suggest_enabled = False
-                    ai_enabled = True
-                    player_color = saved_player
-                    ai_color = saved_ai if saved_ai != saved_player else (
-                        BLACK if saved_player == RED else RED
-                    )
-                    view_color = saved_view
-                    history_scroll = make_history_scrollbar()
-                    setup_in_game_buttons()
-                    init_clocks_for_game()
-                else:
-                    start_new_game(MODE_AI, saved_player)
-                    ai_color = saved_ai if saved_ai != player_color else (BLACK if player_color == RED else RED)
-                    view_color = saved_view
-            else:
-                if saved_start_fen:
-                    stop_engine()
-                    reset_ai_state()
-                    reset_eval_state(reset_display=True)
-                    reset_suggest_state(reset_display=True)
-                    reset_analysis_state()
-                    board = XiangqiBoard(MODE_PVP, fen=saved_start_fen)
-                    game_start_fen = board.to_fen()
-                    game_state = MODE_PVP
-                    eval_enabled = True
-                    suggest_enabled = False
-                    ai_enabled = False
-                    player_color = RED
-                    ai_color = BLACK
-                    view_color = saved_view
-                    history_scroll = make_history_scrollbar()
-                    setup_in_game_buttons()
-                    init_clocks_for_game()
-                else:
-                    start_new_game(MODE_PVP, RED)
-                    view_color = saved_view
+                opponent = saved_ai if saved_ai != saved_player else (
+                    BLACK if saved_player == RED else RED
+                )
+            if not start_session(
+                saved_mode,
+                fen=saved_start_fen,
+                human_side=saved_player if saved_mode == MODE_AI else RED,
+                view=saved_view,
+                opponent=opponent,
+            ):
+                raise ValueError("無法建立存檔起始局面")
 
             saved_diff = payload.get("ai_difficulty", ai_difficulty)
             if saved_diff in AI_DIFFICULTY_PRESETS:
@@ -4717,15 +4630,15 @@ def main():
             if game_state == MODE_MENU:
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     if btn_pvp.is_clicked(mouse_pos):
-                        start_new_game(MODE_PVP, RED)
+                        start_session(MODE_PVP)
                     elif btn_ai_red.is_clicked(mouse_pos):
-                        start_new_game(MODE_AI, RED)
+                        start_session(MODE_AI, human_side=RED)
                     elif btn_ai_black.is_clicked(mouse_pos):
-                        start_new_game(MODE_AI, BLACK)
+                        start_session(MODE_AI, human_side=BLACK)
                     elif btn_formula_menu and btn_formula_menu.is_clicked(mouse_pos):
-                        open_endgame_select(ENDGAME_SECTION_FORMULA)
+                        open_endgame_diff_select(ENDGAME_SECTION_FORMULA)
                     elif btn_endgame_menu and btn_endgame_menu.is_clicked(mouse_pos):
-                        open_endgame_select(ENDGAME_SECTION_CHALLENGE)
+                        open_endgame_diff_select(ENDGAME_SECTION_CHALLENGE)
                     elif btn_editor_menu and btn_editor_menu.is_clicked(mouse_pos):
                         open_editor()
                     elif btn_menu_load and btn_menu_load.is_clicked(mouse_pos):
@@ -4947,7 +4860,7 @@ def main():
                     replay_finished_draw_reason = ""
                     close_draw_offer_popup()
                 elif game_state == MODE_ENDGAME and btn_endgame_levels and btn_endgame_levels.is_clicked(mouse_pos):
-                    open_endgame_select()
+                    open_endgame_diff_select()
                 elif game_state == MODE_ENDGAME and btn_endgame_retry and btn_endgame_retry.is_clicked(mouse_pos):
                     if endgame_current:
                         start_endgame_level(endgame_current)
