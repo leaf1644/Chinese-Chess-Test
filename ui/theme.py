@@ -164,46 +164,6 @@ def draw_card(surface, rect, fill=COLOR_CARD, border=COLOR_CARD_BORDER, radius=1
         pygame.draw.rect(surface, border, rect, border_width, border_radius=radius)
 
 
-def draw_badge(surface, center, text, font, bg=None, fg=None, pad_x=12, pad_y=5, radius=12):
-    """小標籤（Badge）：回傳占用的 rect。"""
-    if bg is None:
-        bg = COLOR_CARD_ALT
-    if fg is None:
-        fg = COLOR_TEXT
-    ts = font.render(text, True, fg)
-    r = ts.get_rect()
-    r.width += pad_x * 2
-    r.height += pad_y * 2
-    r.center = center
-    pygame.draw.rect(surface, bg, r, border_radius=radius)
-    pygame.draw.rect(surface, COLOR_CARD_BORDER, r, 1, border_radius=radius)
-    surface.blit(ts, ts.get_rect(center=r.center))
-    return r
-
-
-def draw_badges_row(surface, centers_y, items, font, gap=10):
-    """水平排列多個 badge；items = [(text, bg, fg), ...]。以 centers_y 的 y、畫面水平置中。"""
-    if not items:
-        return
-    rendered = []
-    total_w = 0
-    for text, bg, fg in items:
-        ts = font.render(text, True, fg or COLOR_TEXT)
-        w = ts.get_width() + 24
-        h = ts.get_height() + 10
-        rendered.append((text, bg, fg, ts, w, h))
-        total_w += w
-    total_w += gap * (len(rendered) - 1)
-    x = (SCREEN_WIDTH - total_w) // 2
-    # 若需在卡片內置中，呼叫端可改用 draw_badge 逐一畫
-    for text, bg, fg, ts, w, h in rendered:
-        r = pygame.Rect(x, centers_y - h // 2, w, h)
-        pygame.draw.rect(surface, bg or COLOR_CARD_ALT, r, border_radius=12)
-        pygame.draw.rect(surface, COLOR_CARD_BORDER, r, 1, border_radius=12)
-        surface.blit(ts, ts.get_rect(center=r.center))
-        x += w + gap
-
-
 def draw_badges_in_card(surface, card_rect, y, items, font, gap=8):
     """在卡片內水平置中排列 badges。"""
     if not items:

@@ -745,23 +745,6 @@ class XiangqiBoard:
         self.warning_msg = msg
         self.warning_timer = time.time()
     
-    def get_position_notation(self, x, y, color):
-        """
-        將棋盤坐標轉為象棋記法位置
-        紅方：x=0是"九"，x=8是"一"
-        黑方：x=0是"一"，x=8是"九"（與紅方對稱）
-        """
-        col_names_cn = ["九", "八", "七", "六", "五", "四", "三", "二", "一"]
-        
-        if color == RED:
-            # 紅方：正常映射
-            col_name = col_names_cn[x]
-        else:
-            # 黑方：反轉映射（8-x），使坐標對稱
-            col_name = col_names_cn[8 - x]
-        
-        return col_name
-    
     def get_direction_notation(self, color, old_x, old_y, new_x, new_y):
         """
         根據移動方向生成記法中的動作詞
@@ -787,107 +770,25 @@ class XiangqiBoard:
                 return "平"
     
     def generate_move_notation(self, piece, old_x, old_y, new_x, new_y):
-        """
-        生成象棋記法，根據不同棋子類型使用不同規則
-        
-        規則：
-        1. 馬：記原始列→到達列（馬二進三、馬2進4）
-        2. 車/炮：
-           - 縱向：記所在列+格數（車一進二、炮2退3）
-           - 橫向：記原始列→到達列（車一平三、炮2平4）
-        3. 兵/卒：
-           - 縱向：記所在列+格數（兵三進一）
-           - 橫向（過河後）：記原始列→到達列（兵一平二）
-        4. 將帥/士/象：記原始列→到達列
-        
-        紅方：用中文列名和距離
-        黑方：用阿拉伯數字列名和距離
-        """
+        """中文記譜。馬一律記到達列；其餘縱向記格數、橫向記到達列。"""
         piece_name = piece.name
         color = piece.color
-        
         col_names_cn = ["九", "八", "七", "六", "五", "四", "三", "二", "一"]
-        num_to_cn = {1: "一", 2: "二", 3: "三", 4: "四", 5: "五", 
+        num_to_cn = {1: "一", 2: "二", 3: "三", 4: "四", 5: "五",
                      6: "六", 7: "七", 8: "八", 9: "九"}
-        
-        # 獲取列標記
         if color == RED:
-            # 紅方：用中文
             old_col = col_names_cn[old_x]
             new_col = col_names_cn[new_x]
         else:
-            # 黑方：用數字（對稱對應）
-            # x=0(紅方九) -> 1, x=4(紅方五) -> 5, x=8(紅方一) -> 9
             old_col = str(old_x + 1)
             new_col = str(new_x + 1)
-        
-        # 判斷移動方向
         direction = self.get_direction_notation(color, old_x, old_y, new_x, new_y)
-        
-        # 根據棋子類型生成記譜
-        if piece_name == '馬':
-            # 馬：記原始列→到達列
+        # 馬只走日字，永遠換列；其餘直走記格數、平移記到達列
+        if piece_name == "馬" or old_x != new_x:
             return f"{piece_name}{old_col}{direction}{new_col}"
-        
-        elif piece_name in ('車', '炮', '包'):
-            # 車/炮：區分縱向和橫向
-            if old_x == new_x:
-                # 縱向移動：記所在的列 + 格數差
-                col = old_col
-                if color == RED:
-                    move_distance = new_y - old_y  # 正數表示向黑方移動
-                else:
-                    move_distance = old_y - new_y  # 正數表示向紅方移動
-                move_distance = abs(move_distance)
-                # 紅方用中文，黑方用數字
-                if color == RED:
-                    distance_str = num_to_cn.get(move_distance, str(move_distance))
-                else:
-                    distance_str = str(move_distance)
-                return f"{piece_name}{col}{direction}{distance_str}"
-            else:
-                # 橫向移動：記原始列→到達列
-                return f"{piece_name}{old_col}{direction}{new_col}"
-        
-        elif piece_name in ('兵', '卒'):
-            # 兵/卒：區分縱向和橫向
-            if old_x == new_x:
-                # 縱向移動：記所在的列 + 格數
-                col = old_col
-                if color == RED:
-                    move_distance = new_y - old_y
-                else:
-                    move_distance = old_y - new_y
-                move_distance = abs(move_distance)
-                # 紅方用中文，黑方用數字
-                if color == RED:
-                    distance_str = num_to_cn.get(move_distance, str(move_distance))
-                else:
-                    distance_str = str(move_distance)
-                return f"{piece_name}{col}{direction}{distance_str}"
-            else:
-                # 橫向移動（過河後）：記原始列→到達列
-                return f"{piece_name}{old_col}{direction}{new_col}"
-        
-        else:
-            # 將帥、士、象：區分縱向和橫向
-            if old_x == new_x:
-                # 縱向移動：記列名 + 方向 + 格數
-                col = old_col
-                if color == RED:
-                    move_distance = new_y - old_y  # 正數表示向黑方移動
-                else:
-                    move_distance = old_y - new_y  # 正數表示向紅方移動
-                move_distance = abs(move_distance)
-                # 紅方用中文，黑方用數字
-                if color == RED:
-                    distance_str = num_to_cn.get(move_distance, str(move_distance))
-                else:
-                    distance_str = str(move_distance)
-                return f"{piece_name}{col}{direction}{distance_str}"
-            else:
-                # 橫向移動：記原始列→到達列
-                return f"{piece_name}{old_col}{direction}{new_col}"
+        distance = abs(new_y - old_y)
+        distance_str = num_to_cn.get(distance, str(distance)) if color == RED else str(distance)
+        return f"{piece_name}{old_col}{direction}{distance_str}"
 
     def get_move_signature(self, piece, old_x, old_y, new_x, new_y):
         """生成可比較的移動簽名：同一棋子同一路徑才視為同一步。"""

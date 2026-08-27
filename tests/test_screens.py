@@ -5,6 +5,7 @@ import ast
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
@@ -125,6 +126,30 @@ class TestGameAppGoto(unittest.TestCase):
         self.assertEqual(self.app.editor_message_kind, "info")
         self.app.set_editor_message("")
         self.assertEqual(self.app.editor_message_kind, "info")
+
+    def test_save_load_replays_moves(self):
+        from xiangqi.constants import MODE_PVP, RED
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "savegame.json")
+            self.app.save_file_path = path
+            self.assertTrue(self.app.start_session(MODE_PVP))
+            pawn = None
+            for p in self.app.board.pieces:
+                if p.color == RED and p.name == "兵" and self.app.board.is_valid_move(p, p.x, p.y - 1):
+                    pawn = p
+                    break
+            self.assertIsNotNone(pawn)
+            ox, oy = pawn.x, pawn.y
+            self.assertTrue(self.app.board.move_piece(pawn, ox, oy - 1))
+            fen_after = self.app.board.to_fen()
+            moves = list(self.app.board.move_ucci_history)
+            self.assertTrue(self.app.save_game_to_disk())
+            self.app.goto(0)
+            self.assertTrue(self.app.load_game_from_disk())
+            self.assertEqual(self.app.board.to_fen(), fen_after)
+            self.assertEqual(self.app.board.move_ucci_history, moves)
+            self.assertGreaterEqual(len(self.app.board.moves), 1)
 
 
 class TestButtonFields(unittest.TestCase):

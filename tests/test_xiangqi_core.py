@@ -413,6 +413,85 @@ class TestGameResult(unittest.TestCase):
         self.assertEqual(board.draw_reason, "紅方超時，黑方獲勝")
 
 
+class TestMoveNotation(unittest.TestCase):
+    def test_red_pawn_forward_is_file_plus_distance(self):
+        board = app.XiangqiBoard()
+        pawn = board.get_piece_at(6, 6)
+        self.assertIsNotNone(pawn)
+        self.assertEqual(
+            board.generate_move_notation(pawn, 6, 6, 6, 5),
+            "兵三進一",
+        )
+
+    def test_red_rook_horizontal_is_dest_file(self):
+        board = app.XiangqiBoard()
+        rook = board.get_piece_at(0, 9)
+        self.assertIsNotNone(rook)
+        self.assertEqual(
+            board.generate_move_notation(rook, 0, 9, 4, 9),
+            "車九平五",
+        )
+
+    def test_knight_always_uses_dest_file(self):
+        board = app.XiangqiBoard()
+        knight = board.get_piece_at(1, 9)
+        self.assertIsNotNone(knight)
+        self.assertEqual(
+            board.generate_move_notation(knight, 1, 9, 2, 7),
+            "馬八進七",
+        )
+
+
+class TestLongCheck(unittest.TestCase):
+    def test_three_consecutive_checks_by_same_piece_loses(self):
+        # 帥放邊線，避免將在中線躲避時與帥照面誤判將死
+        fen = "4k4/9/9/9/9/9/9/9/4R4/8K w - - 0 1"
+        board = app.XiangqiBoard(game_mode=app.MODE_PVP, fen=fen)
+        rook = board.get_piece_at(4, 8)
+        king = board.get_king(app.BLACK)
+        self.assertTrue(board.move_piece(rook, 4, 2))
+        self.assertTrue(board.is_check)
+        self.assertIsNone(board.winner)
+        self.assertTrue(board.move_piece(king, 5, 0))
+        self.assertTrue(board.move_piece(rook, 5, 2))
+        self.assertTrue(board.is_check)
+        self.assertIsNone(board.winner)
+        self.assertTrue(board.move_piece(king, 4, 0))
+        self.assertTrue(board.move_piece(rook, 4, 2))
+        self.assertEqual(board.result.kind, app.ResultKind.LONG_CHECK)
+        self.assertEqual(board.winner, app.BLACK)
+        self.assertIn("長將", board.draw_reason)
+
+    def test_endgame_mode_does_not_lose_on_short_checks(self):
+        fen = "4k4/9/9/9/9/9/9/9/4R4/8K w - - 0 1"
+        board = app.XiangqiBoard(game_mode=app.MODE_ENDGAME, fen=fen)
+        rook = board.get_piece_at(4, 8)
+        king = board.get_king(app.BLACK)
+        self.assertTrue(board.move_piece(rook, 4, 2))
+        self.assertTrue(board.move_piece(king, 5, 0))
+        self.assertTrue(board.move_piece(rook, 5, 2))
+        self.assertTrue(board.move_piece(king, 4, 0))
+        self.assertTrue(board.move_piece(rook, 4, 2))
+        self.assertIsNone(board.winner)
+        if board.draw_reason:
+            self.assertNotIn("長將", board.draw_reason)
+
+
+class TestEndgameCatalog(unittest.TestCase):
+    def test_every_catalog_fen_is_legal_start(self):
+        levels, err = app.load_endgames_catalog()
+        self.assertIsNone(err)
+        self.assertGreaterEqual(len(levels), 10)
+        for lv in levels:
+            board = app.XiangqiBoard(game_mode=app.MODE_ENDGAME, fen=lv["fen"])
+            ok, reason = app.validate_endgame_start_position(board)
+            self.assertTrue(ok, msg=f"{lv['id']} {lv.get('title')}: {reason}")
+
+    def test_generator_has_no_duplicate_candidate_list(self):
+        import gen_endgames_with_pikafish as gen
+        self.assertFalse(hasattr(gen, "CANDIDATES"))
+
+
 class TestSavePayload(unittest.TestCase):
     def test_corrupt_save_does_not_crash_load_helpers(self):
         # 僅驗證 json 錯誤可被捕獲的模式（load_game 在 main 內，此處測 progress）
