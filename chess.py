@@ -8,6 +8,7 @@ import queue
 import math
 import random
 import json
+from dataclasses import dataclass
 
 
 APP_NAME = "ChineseChess"
@@ -149,9 +150,7 @@ def create_empty_xiangqi_board(turn=None):
     board.is_check = False
     board.draw_reason = ""
     board.warning_msg = ""
-    board.move_history = []
-    board.move_ucci_history = []
-    board.move_notation = []
+    board.moves = []
     board.board_state_history = {}
     return board
 
@@ -1480,6 +1479,27 @@ def draw_piece_with_assets(screen, piece, font, view_color, piece_sprites):
 
     piece.draw(screen, font, view_color)
 
+
+@dataclass
+class Move:
+    """一步棋的完整紀錄。悔棋只 pop 這一筆。"""
+    piece: object
+    old_x: int
+    old_y: int
+    new_x: int
+    new_y: int
+    captured: object
+    ucci: str
+    notation: str
+    is_check: bool
+    is_capture: bool
+    is_rootless_capture: bool
+    piece_id: int
+    is_chase: bool
+    chase_targets: tuple
+    signature: tuple
+    repeat_state_key: object = None
+
 # --- 2. 棋子類別 ---
 class Piece:
     def __init__(self, name, color, x, y):
@@ -1510,6 +1530,10 @@ class Piece:
 
 # --- 3. 棋盤核心邏輯 ---
 class XiangqiBoard:
+    LONG_CHECK_COUNT = 3
+    LONG_CHASE_COUNT = 3
+    REPEAT_POSITION_LIMIT = 3
+
     def __init__(self, game_mode=MODE_PVP, fen=None):
         self.pieces = []
         self.turn = RED
@@ -1522,18 +1546,7 @@ class XiangqiBoard:
         self.warning_msg = ""      # 違規提示訊息 (例如：不能送將)
         self.warning_timer = 0     # 訊息顯示計時器
         
-        # 悔棋功能：存儲移動歷史
-        self.move_history = []     # 儲存所有移動: (piece, old_x, old_y, captured_piece)
-        self.move_ucci_history = []  # 儲存 UCCI 走步，用於存檔/重播
-        self.move_notation = []    # 儲存中文記譜: ["兵三進一", "炮8平7", ...]
-        self.move_is_check = []    # 記錄每步移動後是否造成將軍
-        self.move_is_capture = []  # 記錄每步是否吃子
-        self.move_is_rootless_capture = []  # 記錄每步是否為無根吃子（被吃子無防守者）
-        self.move_piece_id = []    # 記錄每步移動是由哪一個棋子進行的（棋子ID）
-        self.move_is_chase = []    # 記錄每步是否形成「捉」（威脅無根子）
-        self.move_chase_targets = [] # 記錄每步被捉目標集合（用於長捉判定）
-        self.move_signature = []   # 記錄每步移動簽名（用於重複著法判和）
-        self.move_repeat_state = [] # 記錄每步是否有寫入重複局面計數（供悔棋回滾）
+        self.moves = []  # list[Move]
         
         # 長將/長捉檢測
         self.draw_reason = ""  # 和棋原因
@@ -1606,17 +1619,7 @@ class XiangqiBoard:
         self.warning_msg = ""
         self.warning_timer = 0
         self.draw_reason = ""
-        self.move_history = []
-        self.move_ucci_history = []
-        self.move_notation = []
-        self.move_is_check = []
-        self.move_is_capture = []
-        self.move_is_rootless_capture = []
-        self.move_piece_id = []
-        self.move_is_chase = []
-        self.move_chase_targets = []
-        self.move_signature = []
-        self.move_repeat_state = []
+        self.moves = []
         self.board_state_history = {}
 
     def get_piece_at(self, x, y):
@@ -1629,6 +1632,84 @@ class XiangqiBoard:
         for p in self.pieces:
             if p.name == target_name: return p
         return None
+
+    @property
+    def move_history(self):
+        """相容舊呼叫端：(piece, old_x, old_y, captured)。"""
+        return [(m.piece, m.old_x, m.old_y, m.captured) for m in self.moves]
+
+    @property
+    def move_ucci_history(self):
+        return [m.ucci for m in self.moves]
+
+    @property
+    def move_notation(self):
+        return [m.notation for m in self.moves]
+
+    def _enforces_repetition_penalties(self):
+        """對局套用長將／長捉／三次重複／無過河子力和；殘局只認將死。"""
+        return self.game_mode != MODE_ENDGAME
+
+    def _recent_plies_by_piece(self, piece, n):
+        """該棋子最近 n 步在 self.moves 中的下標（由舊到新）。不足則回傳較短列表。"""
+        indices = []
+        piece_id = id(piece)
+        for i in range(len(self.moves) - 1, -1, -1):
+            if self.moves[i].piece_id == piece_id:
+                indices.append(i)
+                if len(indices) == n:
+                    break
+        indices.reverse()
+        return indices
+
+    def _is_consecutive_own_plies(self, indices, n):
+        if len(indices) != n:
+            return False
+        return all(indices[j] - indices[j - 1] == 2 for j in range(1, n))
+
+    def _apply_long_check_or_chase(self, piece, next_turn):
+        """同一子連續出手皆將軍或捉同一組無根子 → 執行方負。"""
+        n = self.LONG_CHECK_COUNT
+        indices = self._recent_plies_by_piece(piece, n)
+        if not self._is_consecutive_own_plies(indices, n):
+            return
+        recent = [self.moves[i] for i in indices]
+        if all(m.is_check for m in recent):
+            self.draw_reason = t("msg_long_check", n=n)
+            self.winner = next_turn
+            if self.debug:
+                print(f"[DEBUG] LONG-CHECK by piece id={id(piece)} indices={indices}")
+            return
+        first_targets = recent[0].chase_targets
+        if first_targets and all(m.is_chase and m.chase_targets == first_targets for m in recent):
+            self.draw_reason = t("msg_long_chase", n=self.LONG_CHASE_COUNT)
+            self.winner = next_turn
+            if self.debug:
+                print(f"[DEBUG] LONG-CAPTURE by piece id={id(piece)} targets={first_targets}")
+
+    def _apply_post_move_rules(self, mover, next_turn):
+        """走子確認後的終局規則。殘局不套用長將／長捉／重複判罰，但仍記錄局面次數。"""
+        if self._enforces_repetition_penalties() and not self.draw_reason:
+            self._apply_long_check_or_chase(mover, next_turn)
+        if self._enforces_repetition_penalties() and not self.draw_reason:
+            if not self.has_crossing_piece(RED) and not self.has_crossing_piece(BLACK):
+                self.draw_reason = t("msg_no_crossing")
+                self.winner = None
+        if self._enforces_repetition_penalties() and not self.draw_reason and self.check_repeated_steps_draw():
+            self.draw_reason = t("msg_repeat_moves")
+            self.winner = None
+
+        repeat_state_key = None
+        if not self.draw_reason:
+            repeat_count = self.check_repeat_position()
+            repeat_state_key = self.get_board_state()
+            if self._enforces_repetition_penalties() and repeat_count >= self.REPEAT_POSITION_LIMIT:
+                self.draw_reason = t("msg_repeat_pos", n=self.REPEAT_POSITION_LIMIT)
+                self.winner = None
+
+        if not self.draw_reason and not self.has_valid_move(next_turn):
+            self.winner = mover.color
+        return repeat_state_key
 
     def move_piece(self, piece, target_x, target_y):
         """ 嘗試移動棋子：包含所有規則檢查 """
@@ -1662,178 +1743,65 @@ class XiangqiBoard:
         self.selected_piece = None
         self.warning_msg = "" # 清除錯誤訊息
         
-        # 記錄移動歷史（用於悔棋）
-        self.move_history.append((piece, original_x, original_y, removed_piece))
-        self.move_ucci_history.append(board_to_ucci(original_x, original_y) + board_to_ucci(target_x, target_y))
-        
-        # 生成並記錄中文記譜
-        notation = self.generate_move_notation(piece, original_x, original_y, target_x, target_y)
-        self.move_notation.append(notation)
-        
-        # 記錄本步是否吃子
         is_capture = removed_piece is not None
-        # 判斷是否為無根吃子（被吃的棋子在當時沒有任何合法防守者能吃回）
         is_rootless = False
         if is_capture:
             defended = False
-            # 檢查被吃方是否有任何棋子能合法地吃回新位置上的棋子
             if self.debug:
                 print(f"[DEBUG] Checking defenders for {piece.name} at ({piece.x},{piece.y}) against {removed_piece.name}")
             for p in self.pieces:
                 if p.color == removed_piece.color:
-                    # 先檢查 p 能否合法移動到目標位置（吃掉 piece）
-                    # 此時 p 仍在原位，piece 已在目標位置
                     if not self.is_valid_move(p, piece.x, piece.y, check_simulation=True):
                         if self.debug:
                             print(f"[DEBUG]   {p.name} at ({p.x},{p.y}): invalid move")
                         continue
-                    
-                    # 虛擬執行吃子：防守方移到攻擊方位置，並暫時移除攻擊方
-                    # （否則同一格會有兩枚棋子，is_under_attack / get_piece_at 會失真）
                     original_px, original_py = p.x, p.y
                     self.pieces.remove(piece)
                     p.x = piece.x
                     p.y = piece.y
-
-                    # 檢查是否導致自方被將軍（送將規則）
                     is_safe = not self.is_under_attack(p.color)
-
-                    # 還原狀態
                     p.x = original_px
                     p.y = original_py
                     self.pieces.append(piece)
-
                     if is_safe:
                         defended = True
                         if self.debug:
                             print(f"[DEBUG]   {p.name} at ({original_px},{original_py}): CAN defend (safe)")
                         break
-                    else:
-                        if self.debug:
-                            print(f"[DEBUG]   {p.name} at ({original_px},{original_py}): invalid (would be attacked)")
+                    if self.debug:
+                        print(f"[DEBUG]   {p.name} at ({original_px},{original_py}): invalid (would be attacked)")
             is_rootless = not defended
-        self.move_is_capture.append(is_capture)
-        self.move_is_rootless_capture.append(is_rootless)
         if self.debug and is_capture:
             print(f"[DEBUG] capture by {piece.name} id={id(piece)} at ({piece.x},{piece.y}) - is_rootless={is_rootless}")
         
-        # 檢查是否吃掉對方將帥 (理論上上面檢查B會擋住，除非對方無路可走)
         if target_piece and target_piece.name in ('帥', '將'):
             self.winner = piece.color
 
-        # 切換回合
         next_turn = BLACK if self.turn == RED else RED
         self.turn = next_turn
-        
-        # --- 5. 檢查對手是否被將軍 ---
         is_check = self.is_under_attack(next_turn)
-        if is_check:
-            self.is_check = True
-        else:
-            self.is_check = False
-        
-        # 記錄本步是否造成將軍
-        self.move_is_check.append(is_check)
-        
-        # 記錄本步移動是由哪一個棋子進行的（用 id(piece) 唯一識別）
-        self.move_piece_id.append(id(piece))
-        self.move_signature.append(self.get_move_signature(piece, original_x, original_y, target_x, target_y))
+        self.is_check = is_check
 
-        # 「捉」：本步移動後，該棋子是否威脅到至少一個無根子
         chase_targets = self.get_rootless_threat_targets(piece)
-        self.move_is_chase.append(len(chase_targets) > 0)
-        self.move_chase_targets.append(chase_targets)
-        
-        # 殘局闖關／定式：只認將死與步數，不套用長將／長捉／重複著法作負
-        # （解殺過程常反覆將軍，不應因此判挑戰失敗）
-        endgame_mode = (self.game_mode == MODE_ENDGAME)
-
-        # --- 6. 檢查長將（同一棋子連續將軍 → 執行方負）---
-        # 亞洲常見：連續將軍不變著作負。此處採「同一子連續 3 次出手皆將軍」
-        # （中間穿插對手應著；不是「同一局面出現 3 次」）
-        LONG_CHECK_COUNT = 3
-        if (not endgame_mode) and len(self.move_piece_id) >= LONG_CHECK_COUNT:
-            piece_recent_indices = []
-            for i in range(len(self.move_piece_id) - 1, -1, -1):
-                if self.move_piece_id[i] == id(piece):
-                    piece_recent_indices.append(i)
-                    if len(piece_recent_indices) == LONG_CHECK_COUNT:
-                        break
-
-            if len(piece_recent_indices) == LONG_CHECK_COUNT:
-                piece_recent_indices.reverse()
-                is_consecutive = all(
-                    piece_recent_indices[j] - piece_recent_indices[j - 1] == 2
-                    for j in range(1, LONG_CHECK_COUNT)
-                )
-                if is_consecutive and all(self.move_is_check[idx] for idx in piece_recent_indices):
-                    self.draw_reason = t("msg_long_check", n=LONG_CHECK_COUNT)
-                    self.winner = next_turn  # next_turn 是對手，對手贏
-                    if self.debug:
-                        print(f"[DEBUG] LONG-CHECK by piece id={id(piece)} indices={piece_recent_indices}")
-
-        # --- 7. 檢查長捉（同一棋子連續捉同一組無根子 → 執行方負）---
-        LONG_CHASE_COUNT = 3
-        if (not endgame_mode) and len(self.move_piece_id) >= LONG_CHASE_COUNT and not self.draw_reason:
-            piece_recent_indices = []
-            for i in range(len(self.move_piece_id) - 1, -1, -1):
-                if self.move_piece_id[i] == id(piece):
-                    piece_recent_indices.append(i)
-                    if len(piece_recent_indices) == LONG_CHASE_COUNT:
-                        break
-
-            if len(piece_recent_indices) == LONG_CHASE_COUNT:
-                piece_recent_indices.reverse()
-                is_consecutive = all(
-                    piece_recent_indices[j] - piece_recent_indices[j - 1] == 2
-                    for j in range(1, LONG_CHASE_COUNT)
-                )
-                if is_consecutive:
-                    first_targets = self.move_chase_targets[piece_recent_indices[0]]
-                    all_chase = all(self.move_is_chase[idx] for idx in piece_recent_indices)
-                    same_targets = all(
-                        self.move_chase_targets[idx] == first_targets for idx in piece_recent_indices
-                    )
-                    if all_chase and first_targets and same_targets:
-                        self.draw_reason = t("msg_long_chase", n=LONG_CHASE_COUNT)
-                        self.winner = next_turn
-                        if self.debug:
-                            print(f"[DEBUG] LONG-CAPTURE by piece id={id(piece)} targets={first_targets}")
-
-        # --- 8. 檢查無可過河判和（雙方都沒有過河子力） ---
-        # 殘局殺法題常為少數子力，不在此判和
-        if (not endgame_mode) and not self.draw_reason:
-            red_has_crossing = self.has_crossing_piece(RED)
-            black_has_crossing = self.has_crossing_piece(BLACK)
-            if not red_has_crossing and not black_has_crossing:
-                self.draw_reason = t("msg_no_crossing")
-                self.winner = None
-
-        # --- 9A. 檢查重複著法（雙方各 3 手循環，共 6 步）判和 ---
-        if (not endgame_mode) and not self.draw_reason and self.check_repeated_steps_draw():
-            self.draw_reason = t("msg_repeat_moves")
-            self.winner = None
-
-        # --- 9B. 檢查重複局面：同一局面（含行棋方）出現 3 次則判和 ---
-        # 這才是「同一局面重複 3 次」；與長將（連續將軍）是不同規則
-        repeat_state_key = None
-        REPEAT_POSITION_LIMIT = 3
-        if not self.draw_reason:
-            repeat_count = self.check_repeat_position()
-            repeat_state_key = self.get_board_state()
-            if (not endgame_mode) and repeat_count >= REPEAT_POSITION_LIMIT:
-                self.draw_reason = t("msg_repeat_pos", n=REPEAT_POSITION_LIMIT)
-                self.winner = None
-            # 殘局模式仍記錄局面次數（供除錯／日後統計），但不因此判負／判和
-
-        # --- 10. 檢查對手是否無路可走（困斃／將死） ---
-        if not self.draw_reason and not self.has_valid_move(next_turn):
-            # 對手無路可走，當前玩家獲勝
-            self.winner = piece.color
-
-        # 無論是否觸發和棋/勝負，都記錄這步是否更新過重複局面計數
-        self.move_repeat_state.append(repeat_state_key)
-            
+        move = Move(
+            piece=piece,
+            old_x=original_x,
+            old_y=original_y,
+            new_x=target_x,
+            new_y=target_y,
+            captured=removed_piece,
+            ucci=board_to_ucci(original_x, original_y) + board_to_ucci(target_x, target_y),
+            notation=self.generate_move_notation(piece, original_x, original_y, target_x, target_y),
+            is_check=is_check,
+            is_capture=is_capture,
+            is_rootless_capture=is_rootless,
+            piece_id=id(piece),
+            is_chase=len(chase_targets) > 0,
+            chase_targets=chase_targets,
+            signature=self.get_move_signature(piece, original_x, original_y, target_x, target_y),
+        )
+        self.moves.append(move)
+        move.repeat_state_key = self._apply_post_move_rules(piece, next_turn)
         return True
 
     def undo_move(self, piece, old_x, old_y, removed_piece):
@@ -2133,9 +2101,9 @@ class XiangqiBoard:
 
         例如雙方一直 A-B-A-B-A-B，則 recent 滿足 recent[i]==recent[i-2]。
         """
-        if len(self.move_signature) < 6:
+        if len(self.moves) < 6:
             return False
-        recent = self.move_signature[-6:]
+        recent = [m.signature for m in self.moves[-6:]]
         # 週期 2：第 0 與 2、4 相同；第 1 與 3、5 相同
         for i in range(2, 6):
             if recent[i] != recent[i - 2]:
@@ -2197,60 +2165,26 @@ class XiangqiBoard:
     
     def undo_last_move(self):
         """撤銷上一步移動（悔棋）"""
-        if not self.move_history:
+        if not self.moves:
             self.set_warning(t("msg_no_undo"))
             return False
         
-        # 如果遊戲已結束，重置贏家狀態
         self.winner = None
         self.draw_reason = ""
         
-        # 取出最後一步移動
-        piece, old_x, old_y, captured_piece = self.move_history.pop()
+        move = self.moves.pop()
+        move.piece.x = move.old_x
+        move.piece.y = move.old_y
+        if move.captured:
+            self.pieces.append(move.captured)
         
-        # 同時刪除對應的記譜和狀態記錄
-        if self.move_notation:
-            self.move_notation.pop()
-        if self.move_ucci_history:
-            self.move_ucci_history.pop()
-        if self.move_is_check:
-            self.move_is_check.pop()
-        if self.move_is_capture:
-            self.move_is_capture.pop()
-        if self.move_is_rootless_capture:
-            self.move_is_rootless_capture.pop()
-        if self.move_is_chase:
-            self.move_is_chase.pop()
-        if self.move_chase_targets:
-            self.move_chase_targets.pop()
-        if self.move_signature:
-            self.move_signature.pop()
-        repeat_state_key = None
-        if self.move_piece_id:
-            self.move_piece_id.pop()
-        if self.move_repeat_state:
-            repeat_state_key = self.move_repeat_state.pop()
-        
-        # 還原棋子位置
-        piece.x = old_x
-        piece.y = old_y
-        
-        # 還原被吃掉的棋子
-        if captured_piece:
-            self.pieces.append(captured_piece)
-        
-        # 如果這一步曾寫入重複局面計數，悔棋時需要回滾
-        if repeat_state_key and repeat_state_key in self.board_state_history:
-            self.board_state_history[repeat_state_key] -= 1
-            if self.board_state_history[repeat_state_key] <= 0:
-                del self.board_state_history[repeat_state_key]
+        if move.repeat_state_key and move.repeat_state_key in self.board_state_history:
+            self.board_state_history[move.repeat_state_key] -= 1
+            if self.board_state_history[move.repeat_state_key] <= 0:
+                del self.board_state_history[move.repeat_state_key]
 
-        # 切換回合（悔棋後回到上一個玩家）
         self.turn = BLACK if self.turn == RED else RED
-        
-        # 重新檢查狀態：要檢查「當前回合方」是否被將軍
         self.is_check = self.is_under_attack(self.turn)
-        
         self.set_warning(t("msg_undone"))
         return True
 

@@ -148,6 +148,36 @@ class TestRepeatAndLongRules(unittest.TestCase):
         if board.draw_reason:
             self.assertNotIn("長將", board.draw_reason)
 
+    def test_move_is_single_record(self):
+        board = app.XiangqiBoard(game_mode=app.MODE_PVP)
+        piece = None
+        for p in board.pieces:
+            if p.color == app.RED and p.name == "兵" and board.is_valid_move(p, p.x, p.y - 1):
+                piece = p
+                break
+        self.assertIsNotNone(piece)
+        ox, oy = piece.x, piece.y
+        self.assertTrue(board.move_piece(piece, ox, oy - 1))
+        self.assertEqual(len(board.moves), 1)
+        mv = board.moves[0]
+        self.assertEqual(mv.piece, piece)
+        self.assertEqual((mv.old_x, mv.old_y), (ox, oy))
+        self.assertEqual(board.move_ucci_history, [mv.ucci])
+        self.assertEqual(board.move_notation, [mv.notation])
+        self.assertEqual(len(board.move_history), 1)
+        self.assertTrue(board.undo_last_move())
+        self.assertEqual(len(board.moves), 0)
+        self.assertEqual(board.move_notation, [])
+
+    def test_endgame_mode_skips_repetition_penalties(self):
+        endgame = app.XiangqiBoard(
+            game_mode=app.MODE_ENDGAME,
+            fen="4k4/9/9/9/9/9/9/9/4R4/4K4 w - - 0 1",
+        )
+        self.assertFalse(endgame._enforces_repetition_penalties())
+        pvp = app.XiangqiBoard(game_mode=app.MODE_PVP)
+        self.assertTrue(pvp._enforces_repetition_penalties())
+
     def test_undo_restores_repeat_counter(self):
         board = app.XiangqiBoard(game_mode=app.MODE_PVP)
         fen_before = board.to_fen()
