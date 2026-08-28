@@ -99,6 +99,15 @@ class TestScreenProtocol(unittest.TestCase):
         play_eg = PlayScreen(_App(), MODE_ENDGAME)
         self.assertEqual(play_eg.mode_id, MODE_ENDGAME)
 
+    def test_play_module_binds_ai_timing_constants(self):
+        from ui.screens import play as play_mod
+        from xiangqi.constants import AI_DELAY_SEC, AI_SUGGEST_MOVETIME_MS
+        from xiangqi.engine import DEFAULT_EVAL_MOVETIME_MS
+
+        self.assertEqual(play_mod.AI_DELAY_SEC, AI_DELAY_SEC)
+        self.assertEqual(play_mod.AI_SUGGEST_MOVETIME_MS, AI_SUGGEST_MOVETIME_MS)
+        self.assertEqual(play_mod.AI_EVAL_MOVETIME_MS, DEFAULT_EVAL_MOVETIME_MS)
+
 
 class TestGameAppGoto(unittest.TestCase):
     @classmethod
@@ -126,6 +135,19 @@ class TestGameAppGoto(unittest.TestCase):
         self.assertEqual(self.app.editor_message_kind, "info")
         self.app.set_editor_message("")
         self.assertEqual(self.app.editor_message_kind, "info")
+
+    def test_play_update_does_not_nameerror_ai_delay(self):
+        from xiangqi.constants import MODE_AI, RED
+
+        self.assertTrue(self.app.start_session(MODE_AI, human_side=RED))
+        self.app.ai_enabled = True
+        self.app.ai_wait_until = 0
+        self.app.analysis_status = ""
+        self.app.endgame_status = ""
+        self.app.eval_enabled = False
+        self.app.suggest_enabled = False
+        self.app.ensure_engine = lambda: False
+        self.app.screen.update()
 
     def test_save_load_replays_moves(self):
         from xiangqi.constants import MODE_PVP, RED

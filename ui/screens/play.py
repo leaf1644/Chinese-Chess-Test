@@ -5,6 +5,8 @@ import time
 import pygame
 
 from xiangqi.constants import (
+    AI_DELAY_SEC,
+    AI_SUGGEST_MOVETIME_MS,
     BLACK,
     ENDGAME_SECTION_CHALLENGE,
     ENDGAME_SECTION_FORMULA,
@@ -17,6 +19,7 @@ from xiangqi.constants import (
     MODE_PVP,
     RED,
 )
+from xiangqi.engine import DEFAULT_EVAL_MOVETIME_MS as AI_EVAL_MOVETIME_MS
 from xiangqi.result import ResultKind
 from xiangqi.i18n import (
     ai_difficulty_display,
